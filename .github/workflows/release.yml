@@ -1,0 +1,192 @@
+name: Build & Release
+
+# Startet automatisch, sobald ein Tag wie v2.1.0 gepusht wird (siehe tools/release.py).
+# Von Hand startbar unter "Actions" -> "Build & Release" -> "Run workflow" (baut nur, veröffentlicht nichts).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Version aus version.py lesen und mit dem Tag vergleichen
+        id: read
+        run: |
+          V=$(python3 -c "import re;print(re.search(r'__version__ = \"([^\"]+)\"', open('version.py').read()).group(1))")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$V" ]]; then
+            echo "Tag ${GITHUB_REF#refs/tags/} passt nicht zu version.py ($V)"; exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Abhängigkeiten
+        run: pip install -r requirements.txt pyinstaller Pillow
+      - name: Icon und Versionsdatei
+        run: python tools/build_assets.py
+      - name: Smoke-Test
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          PYTHONUTF8: "1"
+          PYTHONUNBUFFERED: "1"
+          QT_QPA_PLATFORM: offscreen
+          QT_DEBUG_PLUGINS: "1"
+        run: |
+          python -X faulthandler -c "import PyQt6.QtCore as c; print('Qt', c.QT_VERSION_STR)"
+          python -X faulthandler -c "import PyQt6.QtMultimedia; print('Multimedia ok')"
+          python -X faulthandler tools/smoke_test.py 2>&1
+          Write-Host "Exitcode: $LASTEXITCODE"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-windows
+          path: build/screenshots
+          if-no-files-found: ignore
+      - name: App bauen (PyInstaller)
+        run: pyinstaller --noconfirm LiedManager.spec
+      - name: Installer bauen (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:VERSION" installer\LiedManager.iss
+      - name: Portable ZIP
+        shell: pwsh
+        run: Compress-Archive -Path dist\LiedManager -DestinationPath "dist\LiedManager-$env:VERSION-Windows-Portable.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            dist/LiedManager-*-Windows-Setup.exe
+            dist/LiedManager-*-Windows-Portable.zip
+
+  macos:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, arch: arm64 }          # Apple Silicon (M1/M2/M3/M4); Intel-Macs werden nicht mehr gebaut
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      # Optional (nur mit Apple-Developer-Account) – Anleitung in RELEASE.md. Ohne diese Secrets wird ad-hoc signiert.
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Abhängigkeiten
+        run: pip install -r requirements.txt pyinstaller Pillow
+      - name: Icon und Versionsdatei
+        run: python tools/build_assets.py
+      - name: Smoke-Test (Oberfläche startet, Screenshots)
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PYTHONUNBUFFERED: "1"
+          QT_QPA_PLATFORM: offscreen
+          SMOKE_TEST_TIMEOUT: "180"   # hängt der Test, steht nach 3 Minuten im Log, wo – und er endet
+        run: python -X faulthandler tools/smoke_test.py
+      - name: App bauen (PyInstaller)
+        run: pyinstaller --noconfirm LiedManager.spec
+      - name: Signieren
+        run: |
+          APP="dist/LiedManager.app"
+          if [ -n "$MACOS_CERT_P12" ]; then
+            echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+            security create-keychain -p ci build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p ci build.keychain
+            security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+            codesign --force --deep --options runtime --timestamp \
+              --entitlements installer/entitlements.plist --sign "$MACOS_SIGN_IDENTITY" "$APP"
+          else
+            codesign --force --deep --sign - --entitlements installer/entitlements.plist "$APP"
+          fi
+      - name: DMG erstellen
+        run: |
+          DMG="dist/LiedManager-${VERSION}-macOS-${ARCH}.dmg"
+          mkdir dmgroot
+          cp -R dist/LiedManager.app dmgroot/
+          ln -s /Applications dmgroot/Applications
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname "LiedManager ${VERSION}" -srcfolder dmgroot -ov -format UDZO "$DMG"; then
+              break
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "DMG konnte nach 5 Versuchen nicht erstellt werden"
+              exit 1
+            fi
+            echo "hdiutil war belegt, neuer Versuch ($attempt) …"
+            sleep $((attempt * 5))
+          done
+          if [ -n "$MACOS_CERT_P12" ] && [ -n "$APPLE_ID" ]; then
+            codesign --force --sign "$MACOS_SIGN_IDENTITY" "$DMG"
+            xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$DMG"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/LiedManager-*-macOS-*.dmg
+
+  release:
+    needs: [version, windows, macos]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{windows,macos-*}"
+          path: release-files
+          merge-multiple: true
+      - name: Release-Dateien prüfen
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          [ -f "release-files/LiedManager-$V-Windows-Setup.exe" ] || { echo "::error::Windows-Installer fehlt"; exit 1; }
+          f="LiedManager-$V-macOS-arm64.dmg"
+          [ -f "release-files/$f" ] || echo "::warning::$f fehlt – Mac-Nutzer bekommen kein Update angeboten"
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: LiedManager ${{ needs.version.outputs.version }}
+          body: |
+            LiedManager ${{ needs.version.outputs.version }}
+
+            Installer für Windows und Mac. Die installierte App meldet neue Versionen selbst.
+          files: release-files/*

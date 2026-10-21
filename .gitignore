@@ -1,0 +1,32 @@
+# Build-Ergebnisse
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+
+# Daten und Protokolle (gehören nicht ins Repository)
+LiedManager.db
+*.db-journal
+*.db-wal
+*.db-shm
+liedmanager.log
+
+# Sicherungen und Editor-Dateien
+*.bak*
+.idea/
+.vscode/
+
+# Betriebssystem
+.DS_Store
+__MACOSX/
+Thumbs.db
+
+# Pausenfolien sind persönlich/urheberrechtlich – nicht ins Repository
+pausentimer/
+*.pptx
