@@ -120,3 +120,17 @@ Einstellungen). Aufbau der Datei (63 Folien):
 * Folie 63: „Ende!“
 
 Voraussetzung ist Microsoft PowerPoint auf Mac oder Windows.
+
+## Liste der gespielten Lieder
+
+Jedes Lied, das auf dem Beamer gezeigt wird, schreibt das Programm mit **Nummer und Titel** (sonst nichts) in **eine einzige
+Textdatei** `Gespielte Lieder.txt`, in die immer weiter eingetragen wird. Pro Tag steht eine Kopfzeile mit Wochentag und Datum,
+darunter die Lieder; dasselbe Lied direkt hintereinander nur einmal:
+
+    Sonntag, 18.10.2026
+    12 – Großer Gott, wir loben dich
+    p004 – Befiehl du deine Wege
+
+Die Datei öffnest du unter *Einstellungen → Anzeige → „Liste der gespielten Lieder öffnen“*. Mit *Testmodus – nichts
+speichern* (im Fenstertitel steht dann „Testmodus“) läuft alles ohne Eintrag, zum Beispiel bei Proben. Das Speichern lässt sich
+dort auch ganz abschalten.

@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from database import DatabaseManager
 from paths import resolve_db_path
 from version import __version__
-from services import atem
+from services import atem, songlog
 from services.playback import AudioPlayback
 from services.powerpoint import PausentimerController
 from services.recorder import AudioRecorder
@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"LiedManager {__version__}")
+        self._update_title()
         self.setFixedWidth(SidePanel.WIDTH + self.WIDTH)
         self.setFixedHeight(self.COLLAPSED_HEIGHT)
 
@@ -389,6 +389,11 @@ class MainWindow(QMainWindow):
         self.sync.configure()
         self.sync.run_now(url, token, force=True)
 
+    def _update_title(self):
+        """Fenstertitel; im Testmodus (Lieder werden nicht gespeichert) steht das gut sichtbar dabei."""
+        suffix = " – Testmodus" if songlog.is_test_mode() else ""
+        self.setWindowTitle(f"LiedManager {__version__}{suffix}")
+
     def _on_side_collapsed(self, collapsed: bool):
         """Kamera/Bilder ein- oder ausgeklappt: Fensterbreite anpassen und die Wahl merken."""
         new_width = (SidePanel.COLLAPSED_WIDTH if collapsed else SidePanel.WIDTH) + self.WIDTH
@@ -417,6 +422,7 @@ class MainWindow(QMainWindow):
         self.updates.status_changed.disconnect(dialog.set_update_status)
         self.sync.status_changed.disconnect(dialog.set_sync_status)
         if accepted:
+            self._update_title()
             self.camera_panel.update_streams_from_settings()
             self.playback.apply_output_device()
             self._reload_database_if_changed()
@@ -618,6 +624,8 @@ class MainWindow(QMainWindow):
             return
 
         atem.switch("presentation")
+        if self.current_song_summary is not None:
+            songlog.record(self.current_song_summary.nummer, self.current_song_summary.titel)
         screen_index = app_settings().value("beamer_screen", 0, type=int)
         self.close_beamer_windows(keep="presentation")   # Galerie und Kamera-Vollbild weichen dem Lied
 

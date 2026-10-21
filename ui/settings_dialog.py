@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 
 from paths import custom_pausentimer_dir, default_db_path
-from services import atem, devices
+from services import atem, devices, songlog
 from version import __version__
 from services.settings import app_settings
 from ui import theme as t
@@ -251,6 +251,17 @@ class SettingsDialog(QDialog):
             "Öffnet den Ordner für deine Pausenfolien im Datei-Manager\n"
             "Hier liegen die Dateien „pausentimer_<Jahreszeit>.pptx“ (Vorlagen werden nicht mitgeliefert)")
 
+        self.songlog_checkbox = self._checkbox("Gespielte Lieder in einer Textdatei speichern")
+        self.songlog_checkbox.setToolTip(
+            "Jedes Lied, das auf dem Beamer gezeigt wird, kommt mit Nummer und Titel in die Datei „Gespielte Lieder.txt“ (nach Datum geordnet)")
+        self.test_mode_checkbox = self._checkbox("Testmodus – nichts speichern")
+        self.test_mode_checkbox.setToolTip(
+            "Zum Ausprobieren und Proben: Lieder werden nicht in die Liste geschrieben.\n"
+            "Im Fenstertitel steht dann „Testmodus“. Nach dem Test wieder ausschalten.")
+        self.open_songlog_btn = self._outline_button("Liste der gespielten Lieder öffnen")
+        self.open_songlog_btn.setToolTip("Zeigt die Datei „Gespielte Lieder.txt“ im Datei-Manager (dort steht alles, mit Wochentag und Datum)")
+        self.open_songlog_btn.clicked.connect(self.open_songlog_folder)
+
         return self._page(
             self._card(
                 self._field("Präsentations-Bildschirm (Zweitmonitor)", self.screen_combo),
@@ -260,6 +271,7 @@ class SettingsDialog(QDialog):
                 self._field("Pausentimer-Vorlage / Jahreszeit", self.season_combo),
                 self.open_presentations_btn,
             ),
+            self._card(self.songlog_checkbox, self.test_mode_checkbox, self.open_songlog_btn),
         )
 
     def create_atem_tab(self):
@@ -606,6 +618,12 @@ class SettingsDialog(QDialog):
         if path:
             self.db_path_input.setText(path)
 
+    def open_songlog_folder(self):
+        path = songlog.file_path()
+        if not path.exists():
+            path.write_text("", encoding="utf-8")            # erst anlegen, damit der Knopf immer etwas zeigt
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
     def open_presentation_folder(self):
         folder = custom_pausentimer_dir()
         folder.mkdir(parents=True, exist_ok=True)
@@ -655,6 +673,8 @@ class SettingsDialog(QDialog):
         self.screen_combo.setCurrentIndex(s.value("beamer_screen", 0, type=int))
         self.fullscreen_checkbox.setChecked(s.value("fullscreen_mode", True, type=bool))
         self._select_data(self.season_combo, s.value("presentation_season", "frühling", type=str))
+        self.songlog_checkbox.setChecked(s.value(songlog.KEY_ENABLED, True, type=bool))
+        self.test_mode_checkbox.setChecked(s.value(songlog.KEY_TEST_MODE, False, type=bool))
 
         self.atem_enabled_checkbox.setChecked(s.value("atem_enabled", False, type=bool))
         self.atem_ip_input.setText(s.value("atem_ip", "", type=str))
@@ -694,6 +714,8 @@ class SettingsDialog(QDialog):
         s.setValue("beamer_screen", self.screen_combo.currentIndex())
         s.setValue("fullscreen_mode", self.fullscreen_checkbox.isChecked())
         s.setValue("presentation_season", self.season_combo.currentData())
+        s.setValue(songlog.KEY_ENABLED, self.songlog_checkbox.isChecked())
+        s.setValue(songlog.KEY_TEST_MODE, self.test_mode_checkbox.isChecked())
 
         s.setValue("atem_enabled", self.atem_enabled_checkbox.isChecked())
         s.setValue("atem_ip", self.atem_ip_input.text().strip())

@@ -612,6 +612,10 @@ def main() -> int:
     make_test_db(tmp)
     os.chdir(tmp)  # die Testdatenbank wird zuerst im Arbeitsverzeichnis gesucht
     SHOTS.mkdir(parents=True, exist_ok=True)
+    from services import songlog as _songlog
+    _songlog_dir = tmp / "Gespielte Lieder"                 # die echte Liederliste des Benutzers bleibt unberührt
+    _songlog_dir.mkdir()
+    _songlog.songlog_dir = lambda: _songlog_dir
 
     from PyQt6.QtCore import QAbstractAnimation, QSettings
     from PyQt6.QtWidgets import QApplication
@@ -852,6 +856,57 @@ def main() -> int:
     assert recording_filename("Max Muster", _dt.datetime(2026, 10, 18)) == "2026.10.18 - Max Muster.wav"
     assert recording_filename("", _dt.datetime(2026, 10, 18)) == "2026.10.18.wav"
     assert recording_filename('a/b:c?', _dt.datetime(2026, 10, 18)) == "2026.10.18 - abc.wav"
+
+    # Liste der gespielten Lieder und Testmodus
+    from services.settings import app_settings as _ss
+    _ss().setValue(_songlog.KEY_ENABLED, True)
+    _ss().setValue(_songlog.KEY_TEST_MODE, False)
+    found, seen = [], set()
+    for query in ("1", "2", "3", "4", "5", "50", "p"):
+        for song in window.db.search_songs(query):
+            if song.rowid not in seen:
+                seen.add(song.rowid)
+                found.append(song)
+    assert len(found) >= 2, "Testdatenbank braucht mindestens zwei Lieder"
+    window._load_song(found[0])
+    window.open_presentation()
+    window.open_presentation()                                  # dasselbe Lied direkt nochmal: kein zweiter Eintrag
+    log_file = _songlog.file_path()
+    import datetime as _dt0
+    header = _songlog.format_day(_dt0.date.today())
+    expected = _songlog.format_entry(found[0].nummer, found[0].titel)
+    assert log_file.read_text(encoding="utf-8").splitlines() == [header, expected], log_file.read_text(encoding="utf-8")
+    window._load_song(found[1])
+    window.open_presentation()
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and lines[2] == _songlog.format_entry(found[1].nummer, found[1].titel)
+    _ss().setValue(_songlog.KEY_TEST_MODE, True)
+    window._update_title()
+    assert "Testmodus" in window.windowTitle()
+    window._load_song(found[0])
+    window.open_presentation()
+    assert len(log_file.read_text(encoding="utf-8").splitlines()) == 3, "im Testmodus darf nichts gespeichert werden"
+    _ss().setValue(_songlog.KEY_ENABLED, False)
+    _ss().setValue(_songlog.KEY_TEST_MODE, False)
+    window._update_title()
+    assert "Testmodus" not in window.windowTitle()
+    window.open_presentation()
+    assert len(log_file.read_text(encoding="utf-8").splitlines()) == 3, "ausgeschaltet darf nichts gespeichert werden"
+    _ss().setValue(_songlog.KEY_ENABLED, True)                  # neuer Tag: Leerzeile, Kopfzeile mit Wochentag, weiter in derselben Datei
+    assert _songlog.record("7", "Neuer Tag", when=_dt0.date(2026, 10, 25))
+    assert not _songlog.record("7", "Neuer Tag", when=_dt0.date(2026, 10, 25)), "doppelt hintereinander"
+    assert _songlog.record("8", None, when=_dt0.date(2026, 10, 25))
+    assert log_file.read_text(encoding="utf-8").splitlines()[3:] == ["", "Sonntag, 25.10.2026", "7 – Neuer Tag", "8"]
+    assert _songlog.format_day(_dt0.date(2026, 10, 21)) == "Mittwoch, 21.10.2026"
+    _ss().setValue(_songlog.KEY_TEST_MODE, True)                # ab hier: Testmodus, damit spätere Tests nichts schreiben
+    _ss().setValue(_songlog.KEY_ENABLED, True)
+    window.close_beamer_windows()
+    from ui.settings_dialog import SettingsDialog as _SD
+    dlg = _SD(window)
+    assert dlg.test_mode_checkbox.isChecked() and dlg.songlog_checkbox.isChecked()
+    assert dlg.test_mode_checkbox.toolTip() and dlg.open_songlog_btn.toolTip() and dlg.songlog_checkbox.toolTip()
+    dlg.close()
+    assert _songlog.format_entry("p012", "None") == "p012" and _songlog.format_entry(5, " Ein  Titel ") == "5 – Ein Titel"
 
     # Seitenleiste ein- und ausklappen (Klick auf den offenen Reiter)
     from services.settings import app_settings as _app_settings
