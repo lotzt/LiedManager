@@ -1165,7 +1165,7 @@ def main() -> int:
     assert _ccli.numbers_from_db(ccli_db) == {"p001": "7123456"}, "CCLI-Nummer muss auf Ziffern bereinigt werden"
     ccli_log = tmp / "ccli_log.txt"
     log_text = "Sonntag, 25.10.2026\r\np001 – Eins\r\n7 – Sieben\r\n8\r\n"
-    ccli_log.write_text(log_text, encoding="utf-8")
+    ccli_log.write_bytes(log_text.encode("utf-8"))
 
     class _Store(dict):
         def value(self, key, default=None):
