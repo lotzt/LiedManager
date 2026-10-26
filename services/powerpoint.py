@@ -182,20 +182,10 @@ end tell
 
 
 # --- Windows: PowerShell + PowerPoint-COM (ohne zusätzliche Pakete) ---
-# Präsentation ohne Bearbeitungsfenster öffnen (Presentations.Open … WithWindow = 0). Danach wird das (leere) PowerPoint-
-# Hauptfenster versteckt und das Präsentationsfenster als „Werkzeugfenster“ markiert: Es läuft weiter auf dem Beamer,
-# erscheint aber weder in der Taskleiste noch bei Alt+Tab. Schlägt etwas davon fehl, läuft die Präsentation trotzdem.
-_PS_HIDE = (
-    "try { if (-not ('LM.Win' -as [type])) { Add-Type -Namespace LM -Name Win -MemberDefinition "
-    "'[DllImport(\"user32.dll\")] public static extern int GetWindowLong(IntPtr h, int i); "
-    "[DllImport(\"user32.dll\")] public static extern int SetWindowLong(IntPtr h, int i, int v); "
-    "[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c);' }; "
-    "try { $app = [IntPtr][int]$ppt.HWND; if ($app -ne [IntPtr]::Zero) { [LM.Win]::ShowWindow($app, 0) | Out-Null } } catch {}; "
-    "if ($ppt.SlideShowWindows.Count -gt 0) { $h = [IntPtr][int]$ppt.SlideShowWindows.Item(1).HWND; "
-    "$ex = [LM.Win]::GetWindowLong($h, -20); [LM.Win]::ShowWindow($h, 0) | Out-Null; "
-    "[LM.Win]::SetWindowLong($h, -20, (($ex -bor 0x80) -band (-bnot 0x40000))) | Out-Null; "
-    "[LM.Win]::ShowWindow($h, 5) | Out-Null } } catch {}"
-)
+# Präsentation ohne Bearbeitungsfenster öffnen (Presentations.Open … WithWindow = 0). Das Skript meldet danach die
+# Fenster-Kennungen („HWND:<PowerPoint>:<Präsentation>“); das Ausblenden aus Taskleiste und Alt+Tab erledigt Python
+# (hide_windows_from_taskbar) – schnell und ohne in PowerShell C#-Code zu übersetzen (das dauerte Sekunden und hing teils).
+_PS_HWND = ("try {{ Write-Output ('HWND:' + $ppt.HWND + ':' + $ppt.SlideShowWindows.Item(1).HWND) }} catch {{}}")
 _PS_OPEN = """
 $ErrorActionPreference = 'Stop'
 try {{
@@ -203,7 +193,7 @@ try {{
   $pres = $ppt.Presentations.Open('{path}', 0, 0, 0)
   try {{ $pres.SlideShowSettings.ShowPresenterView = 0 }} catch {{}}
   $pres.SlideShowSettings.Run() | Out-Null
-  {hide}
+  {hwnd}
   exit 0
 }} catch {{ Write-Output $_.Exception.Message; exit 1 }}
 """
@@ -240,6 +230,45 @@ def _hide_console(process: QProcess) -> None:
         pass
 
 
+def hide_windows_from_taskbar(output: str) -> None:
+    """Windows: blendet das leere PowerPoint-Hauptfenster aus und nimmt das Präsentationsfenster aus Taskleiste und Alt+Tab
+    (es bleibt auf dem Beamer sichtbar). ``output`` enthält „HWND:<PowerPoint>:<Präsentation>“ vom Öffnen-Skript."""
+    if not sys.platform.startswith("win"):
+        return
+    line = next((row for row in str(output).splitlines() if row.startswith("HWND:")), "")
+    parts = line.split(":")
+    if len(parts) != 3:
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        app, show = int(parts[1] or 0), int(parts[2] or 0)
+        GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x80, 0x40000
+        SW_HIDE, SW_SHOWNA = 0, 8
+        if app and user32.IsWindowVisible(app):
+            user32.ShowWindow(app, SW_HIDE)
+        if show:
+            style = user32.GetWindowLongW(show, GWL_EXSTYLE)
+            wanted = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+            if wanted != style:
+                user32.ShowWindow(show, SW_HIDE)          # die Taskleiste übernimmt den neuen Stil erst nach Aus-/Einblenden
+                user32.SetWindowLongW(show, GWL_EXSTYLE, wanted)
+                user32.ShowWindow(show, SW_SHOWNA)
+                user32.SetForegroundWindow(show)          # Präsentation bleibt aktiv (sonst halten die Folienzeiten an)
+    except (AttributeError, OSError, ValueError) as exc:
+        log.info("Präsentationsfenster nicht aus der Taskleiste genommen: %s", exc)
+
+
+def clear_download_mark(path: str) -> None:
+    """Windows: Die Markierung „aus dem Internet geladen“ (Zone.Identifier) der Kopie entfernen. Sonst öffnet PowerPoint
+    die Datei in der geschützten Ansicht – die Bildschirmpräsentation startet dann nicht oder hängt."""
+    if sys.platform.startswith("win"):
+        try:
+            os.remove(path + ":Zone.Identifier")
+        except OSError:
+            pass
+
+
 def supported() -> bool:
     return sys.platform == "darwin" or sys.platform.startswith("win")
 
@@ -264,19 +293,22 @@ def _command(mac_script: str, ps_script: str, session_script: str = ""):
 _SESSION_OPEN = ("$ErrorActionPreference = 'Stop'; $ppt = New-Object -ComObject PowerPoint.Application; "
                  "$pres = $ppt.Presentations.Open('{path}', 0, 0, 0); "
                  "try {{ $pres.SlideShowSettings.ShowPresenterView = 0 }} catch {{}}; "
-                 "$pres.SlideShowSettings.Run() | Out-Null; {hide}")
-_SESSION_CLOSE = ("try {{ $ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application'); "
-                  "foreach ($p in @($ppt.Presentations)) {{ $p.Saved = -1; $p.Close() }}; $ppt.Quit() }} catch {{}}")
+                 "$pres.SlideShowSettings.Run() | Out-Null; {hwnd}")
+_SESSION_CLOSE = ("try {{ if ($null -eq $ppt) {{ $ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') }}; "
+                  "foreach ($p in @($ppt.Presentations)) {{ $p.Saved = -1; $p.Close() }}; $ppt.Quit() }} catch {{}}; $ppt = $null")
 _SESSION_GOTO = ("$ErrorActionPreference = 'Stop'; "
+                 "try {{ $lmshows = $ppt.SlideShowWindows.Count }} catch {{ "      # $ppt aus dem Öffnen weiterverwenden
                  "$ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application'); "
-                 "if ($ppt.SlideShowWindows.Count -eq 0) {{ Write-Output 'wait' }} else "
+                 "$lmshows = $ppt.SlideShowWindows.Count }}; "
+                 "if ($lmshows -eq 0) {{ Write-Output 'wait' }} else "
                  "{{ $ppt.SlideShowWindows.Item(1).View.GotoSlide({slide}); Write-Output 'ok' }}")
 
 
 def open_command(path: str):
     ps_path = path.replace("'", "''")
-    return _command(_OPEN_SCRIPT.format(path=path), _PS_OPEN.format(path=ps_path, hide=_PS_HIDE),
-                    _SESSION_OPEN.format(path=ps_path, hide=_PS_HIDE))
+    hwnd = _PS_HWND.format()
+    return _command(_OPEN_SCRIPT.format(path=path), _PS_OPEN.format(path=ps_path, hwnd=hwnd),
+                    _SESSION_OPEN.format(path=ps_path, hwnd=hwnd))
 
 
 def close_command():
@@ -393,6 +425,20 @@ class PausentimerController(QObject):
     def running(self) -> bool:
         return self._running
 
+    def shutdown(self) -> None:
+        """Beim Beenden des Programms: die vorab gestartete PowerShell beenden (PowerPoint selbst bleibt unberührt)."""
+        self._timer.stop()
+        if self._session is not None:
+            self._session.kill()
+
+    def warm_up(self) -> None:
+        """Windows: die PowerShell schon im Leerlauf starten, damit der Pausentimer auf Knopfdruck schneller öffnet."""
+        if not sys.platform.startswith("win") or self._running:
+            return
+        if self._session is None:
+            self._session = _PowerShellSession(self)
+        self._session.ensure()
+
     def seconds_left(self):
         """Restzeit der Pause in Sekunden (``None``, wenn der Pausentimer nicht läuft)."""
         if not self._running or self._finish is None:
@@ -422,7 +468,8 @@ class PausentimerController(QObject):
         def prepare():                           # Kopieren und Ansagen eintragen (kann bei großen Vorlagen Sekunden dauern)
             try:
                 temp_path = os.path.join(tempfile.gettempdir(), f"pausentimer_temp_{season}.pptx")
-                shutil.copy(source, temp_path)
+                shutil.copyfile(source, temp_path)       # nur der Inhalt (keine Markierung „aus dem Internet“)
+                clear_download_mark(temp_path)
                 try:
                     write_announcements(temp_path, lines)
                 except Exception as exc:  # fehlerhafte Ansagen sollen den Start nicht verhindern
@@ -465,10 +512,7 @@ class PausentimerController(QObject):
         self._running = False
         self._slide = None
         power.release()
-        def closed(ok, out):
-            if self._session is not None and not self._running:
-                self._session.kill()                   # PowerShell-Sitzung beenden, solange keine Präsentation läuft
-        self._run_script(close_command(), closed)
+        self._run_script(close_command(), lambda ok, out: None)   # Sitzung bleibt offen: der nächste Start geht schneller
         self.running_changed.emit(False)
         atem.switch("default")
 
@@ -495,6 +539,7 @@ class PausentimerController(QObject):
         if not self._running:
             return
         if ok:
+            hide_windows_from_taskbar(output)
             self._timer.start()
             return
         log.error("PowerPoint-Präsentation konnte nicht gestartet werden: %s", output)

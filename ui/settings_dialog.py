@@ -367,6 +367,9 @@ class SettingsDialog(QDialog):
         self.atem_pres_spin = self._spinbox()
         self.atem_cam_spin = self._spinbox()
         self.atem_default_spin = self._spinbox()
+        self.atem_start_spin = self._spinbox(0, 20)
+        self.atem_start_spin.setSpecialValueText("Schwarz")          # 0 = Schwarzbild (Black) des Mischers
+        self.atem_start_spin.setToolTip("Darauf schaltet der Mischer, sobald LiedManager startet (0 = Schwarz)")
         self.atem_pres_spin.setToolTip("Mischer-Eingang für Beamer-Bild und Pausentimer")
         self.atem_cam_spin.setToolTip("Mischer-Eingang für die Kamera-Bilder")
         self.atem_default_spin.setToolTip("Mischer-Eingang, auf den beim Beenden zurückgeschaltet wird")
@@ -378,6 +381,7 @@ class SettingsDialog(QDialog):
             ("Präsentation / Pausentimer", self.atem_pres_spin),
             ("Seitenleisten-Kamera", self.atem_cam_spin),
             ("Standard beim Schließen", self.atem_default_spin),
+            ("Beim Programmstart", self.atem_start_spin),
         )
         for row, (text, spin) in enumerate(rows):
             label = QLabel(text)
@@ -951,6 +955,7 @@ class SettingsDialog(QDialog):
         self.atem_pres_spin.setValue(s.value("atem_pres_channel", 3, type=int))
         self.atem_cam_spin.setValue(s.value("atem_cam_channel", 4, type=int))
         self.atem_default_spin.setValue(s.value("atem_default_channel", 1, type=int))
+        self.atem_start_spin.setValue(s.value("atem_start_channel", 0, type=int))
 
         self._select_data(self.audio_device_combo, s.value(devices.KEY_OUTPUT, "", type=str))
         self._select_data(self.mic_device_combo, s.value(devices.KEY_INPUT, "", type=str))
@@ -1009,6 +1014,7 @@ class SettingsDialog(QDialog):
         s.setValue("atem_pres_channel", self.atem_pres_spin.value())
         s.setValue("atem_cam_channel", self.atem_cam_spin.value())
         s.setValue("atem_default_channel", self.atem_default_spin.value())
+        s.setValue("atem_start_channel", self.atem_start_spin.value())
 
         s.setValue(devices.KEY_OUTPUT, self.audio_device_combo.currentData() or "")
         s.setValue(devices.KEY_INPUT, self.mic_device_combo.currentData() or "")

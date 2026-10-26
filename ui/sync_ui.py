@@ -22,15 +22,23 @@ STATUS_MANUAL = "Verbunden – Abgleich nur auf Knopfdruck (automatisch aus)"
 class _SyncWorker(QThread):
     done = pyqtSignal(object)      # SyncResult
     progress = pyqtSignal(int, int)    # erledigt, gesamt (nur beim Senden)
+    phase = pyqtSignal(str)            # was gerade passiert
 
     def __init__(self, db_path: str, url: str, token: str, force: bool = False, retry: bool = False, parent=None):
         super().__init__(parent)
         self._db_path, self._url, self._token, self._force, self._retry = db_path, url, token, force, retry
         self._sync = None
+        self._cancelled = False
 
     def cancel(self) -> None:
+        self._cancelled = True
         if self._sync is not None:
             self._sync.cancelled.set()
+
+    @property
+    def writes_database(self) -> bool:
+        """Nur beim Empfangen wird die lokale Datenbank geändert; davor darf der Thread beim Beenden sofort weg."""
+        return self._sync is not None and self._sync.phase == "receive"
 
     def run(self):
         last = [-1]
@@ -42,6 +50,7 @@ class _SyncWorker(QThread):
                 self.progress.emit(done, total)
 
         try:
+            self.phase.emit("Sichert die Datenbank …")
             try:                                              # Sicherung vor einem Abgleich (täglich) bzw. vor „Alles neu hochladen“
                 if self._force:
                     db_backup.backup(self._db_path, reason="vor „Alles neu hochladen“")
@@ -50,7 +59,10 @@ class _SyncWorker(QThread):
             except Exception:
                 log.exception("Datenbank-Sicherung fehlgeschlagen")
             self._sync = ServerSync(self._db_path, self._url, self._token, sync_state_path(self._db_path),
-                                    force_upload=self._force, on_progress=report, retry_failed=self._retry)
+                                    force_upload=self._force, on_progress=report, retry_failed=self._retry,
+                                    on_phase=self.phase.emit)
+            if self._cancelled:
+                self._sync.cancelled.set()
             result = self._sync.run_once()
         except Exception as exc:   # nie den Thread mit Absturz beenden
             log.exception("Datenbank-Abgleich fehlgeschlagen")
@@ -131,6 +143,7 @@ class SyncController(QObject):
         self._worker = _SyncWorker(self._window.db.db_name, url, token, force, manual or force or retry_known, self)
         self._worker.done.connect(self._on_done)
         self._worker.progress.connect(lambda done, total, force=force: self._on_progress(done, total, force))
+        self._worker.phase.connect(lambda text: self._set_status(text) if self._worker is not None else None)
         self._worker.start()
         return True
 
@@ -165,6 +178,7 @@ class SyncController(QObject):
         worker = self._worker
         if worker is not None and worker.isRunning():
             worker.cancel()             # bricht zwischen zwei Liedern ab (kein Warten auf den ganzen Abgleich)
-            if not worker.wait(6_000):
+            # Solange nur gelesen/gesendet wird, muss niemand warten; beim Empfangen (schreibt die Datenbank) etwas länger
+            if not worker.wait(6_000 if worker.writes_database else 1_500):
                 worker.terminate()      # ein einzelnes riesiges Lied hängt: SQLite rollt eine halbe Transaktion von selbst zurück
-                worker.wait(3_000)
+                worker.wait(2_000)

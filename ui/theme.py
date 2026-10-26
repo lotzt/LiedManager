@@ -9,6 +9,8 @@ Stylesheet-Bausteine. Die Zustände sind überall nach demselben Muster aufgebau
     Fokus    -> Kontur ACCENT (Eingabefelder) / ACCENT_LIGHT (Tastatur-Fokus bei Buttons)
     gewählt  -> Kontur ACCENT + leichte Bronze-Tönung der Fläche
 """
+import sys
+
 from PyQt6.QtCore import QEvent, QObject, QTimer
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPalette
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QPushButton
@@ -356,9 +358,12 @@ class _DialogButtonFit(QObject):
     „Herunterladen und installieren“. Beim Anzeigen wird jede Knopfbreite deshalb mit der echten Schrift nachgerechnet."""
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Show and isinstance(obj, (QMessageBox, QProgressDialog)):
-            self.fit(obj)
-            QTimer.singleShot(0, lambda o=obj: self.fit(o))     # nach dem Polieren (macOS) noch einmal
+        if event.type() == QEvent.Type.Show:
+            if isinstance(obj, (QMessageBox, QProgressDialog)):
+                self.fit(obj)
+                QTimer.singleShot(0, lambda o=obj: self.fit(o))     # nach dem Polieren (macOS) noch einmal
+            if sys.platform.startswith("win") and getattr(obj, "isWindow", None) and obj.isWindow():
+                dark_title_bar(obj)
         return False
 
     @staticmethod
@@ -380,6 +385,22 @@ class _DialogButtonFit(QObject):
 
 
 _dialog_fit = None
+
+
+def dark_title_bar(window) -> None:
+    """Windows 10/11: dunkle Titelleiste passend zum Programm (sonst bleibt sie im hellen Windows-Design weiß)."""
+    if not sys.platform.startswith("win") or window.property("lm_dark_title"):
+        return
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        value = ctypes.c_int(1)
+        for attribute in (20, 19):          # DWMWA_USE_IMMERSIVE_DARK_MODE (ab Windows 10 20H1 = 20, davor 19)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                break
+        window.setProperty("lm_dark_title", True)
+    except (AttributeError, OSError, ValueError):
+        pass
 
 
 def apply_theme(app: QApplication) -> None:

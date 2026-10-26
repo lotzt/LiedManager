@@ -25,7 +25,9 @@ CHANNELS = {
     "presentation": ("atem_pres_channel", 3),
     "camera": ("atem_cam_channel", 4),
     "default": ("atem_default_channel", 1),
+    "start": ("atem_start_channel", 0),        # beim Programmstart; 0 = Schwarz (Black) des ATEM
 }
+BLACK = 0
 
 _jobs: "queue.Queue[tuple[str, int]]" = queue.Queue()
 _worker = None
@@ -103,7 +105,7 @@ def _ensure_worker() -> None:
 
 
 def switch(kind: str) -> None:
-    """Schaltet den Mischer auf den Kanal ``kind`` ("presentation", "camera" oder "default").
+    """Schaltet den Mischer auf den Kanal ``kind`` ("presentation", "camera", "default" oder "start"; 0 = Schwarz).
 
     Tut nichts, wenn die Ansteuerung deaktiviert ist, kein ATEM-Modul vorhanden ist oder keine IP gesetzt wurde.
     """
@@ -118,7 +120,7 @@ def switch(kind: str) -> None:
     _ensure_worker()
 
 
-def wait_idle(timeout: float = 3.0) -> None:
+def wait_idle(timeout: float = 2.0) -> None:
     """Wartet beim Beenden kurz, bis ausstehende Schaltbefehle (z. B. „Standardkanal“) gesendet sind."""
     deadline = time.monotonic() + timeout
     while _jobs.unfinished_tasks and time.monotonic() < deadline:

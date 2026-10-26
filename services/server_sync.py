@@ -244,13 +244,15 @@ class ServerApi:
 # ----------------------------------------------------------------------
 class ServerSync:
     def __init__(self, db_path, url, token, state_path, now_ms=None, api: Optional[ServerApi] = None,
-                 force_upload: bool = False, on_progress=None, retry_failed: bool = False):
+                 force_upload: bool = False, on_progress=None, retry_failed: bool = False, on_phase=None):
         """``force_upload``: Alles neu hochladen – die lokale Datenbank wird zum verbindlichen Stand für alle Geräte.
         ``on_progress(erledigt, gesamt)`` wird beim Senden nach jedem Lied aufgerufen (aus dem Abgleich-Thread)."""
         self.force_upload = force_upload
         self.cancelled = threading.Event()        # beim Beenden des Programms gesetzt: Abgleich bricht zwischen zwei Liedern ab
         self.retry_failed = retry_failed          # abgelehnte Lieder sofort erneut versuchen (statt erst nach einer Wartezeit)
         self._on_progress = on_progress
+        self._on_phase = on_phase                 # on_phase(text): was gerade passiert (für die Statuszeile)
+        self.phase = ""                           # "send" | "receive" – beim Empfangen wird die lokale Datenbank geschrieben
         self.db_path = str(db_path)
         self.url = normalize_url(url)
         self.token = (token or "").strip()
@@ -277,7 +279,10 @@ class ServerSync:
         try:
             api = self._api or ServerApi(self.url, self.token)
             state = self._open_state()
+            self.phase = "send"
             self._send(state, result, api)
+            self.phase = "receive"
+            self._phase("Holt Änderungen der anderen Geräte …")
             self._receive(state, result, api)
         except SyncError as exc:
             log.warning("Abgleich fehlgeschlagen: %s", exc)
@@ -368,7 +373,7 @@ class ServerSync:
         return ""
 
     @staticmethod
-    def _fingerprints(conn, columns) -> dict:
+    def _fingerprints(conn, columns, cancelled=None) -> dict:
         """Schlüssel -> (Fingerabdruck, rowid). Liest Zeile für Zeile, auch bei sehr großen Audios.
         Die CCLI-Nummer fließt nur ein, wenn eine eingetragen ist – Lieder ohne Nummer behalten ihren bisherigen Wert."""
         found = {}
@@ -376,6 +381,8 @@ class ServerSync:
         ccli_col = ServerSync._ccli_col(conn)
         select = ", ".join(("rowid", KEY_COLUMN) + tuple(columns) + ((f'"{ccli_col}"',) if ccli_col else ()))
         for row in conn.execute(f"SELECT {select} FROM Data ORDER BY rowid"):
+            if cancelled is not None and cancelled.is_set():
+                raise SyncError("Abgebrochen.")
             key = make_key(row[1], seen)
             if key is not None:
                 values = tuple(row[2:2 + len(columns)])
@@ -425,10 +432,11 @@ class ServerSync:
             result.failed_songs = [n for n in str(self._meta(state, "failed_names", "")).split("|") if n]
             return                                    # Datenbank unverändert seit dem letzten Abgleich
 
+        self._phase("Prüft die Lieder auf Änderungen …")
         conn = self._connect_local()
         try:
             columns = self._local_columns(conn)
-            current = self._fingerprints(conn, columns)
+            current = self._fingerprints(conn, columns, self.cancelled)
 
             if not baseline_done and not force:       # erster Lauf: aktuellen Stand als Ausgangspunkt merken
                 state.executemany("INSERT OR REPLACE INTO known (key, hash, ts, dev, deleted) VALUES (?, ?, 0, '', 0)",
@@ -538,6 +546,13 @@ class ServerSync:
         for index, part in enumerate(parts):
             api.call("push_part", uid=uid, idx=index, data=part)
         return api.call("push", key=key, ts=ts, dev=device, hash=digest, deleted=0, data=None, parts=len(parts), uid=uid)
+
+    def _phase(self, text: str) -> None:
+        if self._on_phase is not None:
+            try:
+                self._on_phase(text)
+            except Exception:  # noqa: BLE001 – die Anzeige darf den Abgleich nie stören
+                pass
 
     def _report(self, done: int, total: int) -> None:
         if self._on_progress is not None:

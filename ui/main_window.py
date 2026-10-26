@@ -11,7 +11,7 @@ import os
 from PyQt6.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
     QPushButton, QStackedWidget, QWidget,
 )
 
@@ -75,6 +75,9 @@ class MainWindow(QMainWindow):
         self.setFixedWidth(SidePanel.WIDTH + self.WIDTH)
         self.setFixedHeight(self.COLLAPSED_HEIGHT)
         self._restore_position()
+        # Beim Start erst unsichtbar zeigen und nach dem ersten Zeichnen einblenden – sonst blitzt kurz ein weißes Fenster auf
+        self.setWindowOpacity(0.0)
+        self._revealed = False
 
         self.db = DatabaseManager()
         self.presentation_window = None
@@ -310,6 +313,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Geometrie & Fenster-Ereignisse
     # ------------------------------------------------------------------
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._revealed:
+            self._revealed = True
+            from ui.theme import dark_title_bar
+            dark_title_bar(self)                              # Windows: vor dem Einblenden, damit auch die Leiste dunkel erscheint
+            QTimer.singleShot(120, lambda: self.setWindowOpacity(1.0))
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
@@ -356,10 +367,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save_position()
+        self.hide()                       # sofort weg vom Bildschirm; das Aufräumen (Abgleich, Mischer …) läuft danach
+        QApplication.processEvents()
         # Laufende Aufnahme sichern, statt eine Temp-Datei zurückzulassen
         self.recorder.stop_and_save(self.recording_panel.preacher_input.text())
         self.playback.stop()
         self.camera_panel.stop_streams()
+        self.pausentimer.shutdown()
         if self.presentation_window:
             self.presentation_window.close()
         if self.gallery_window:

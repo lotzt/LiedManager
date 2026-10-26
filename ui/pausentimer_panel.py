@@ -1,6 +1,8 @@
 """Klappbarer Pausentimer-Bereich: Endzeit, Start/Stopp und Ansagen-Text."""
+import sys
+
 from PyQt6.QtCore import QEvent, QObject, Qt, QTime, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetrics
+from PyQt6.QtGui import QFont, QFontMetrics, QFontMetricsF
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QPlainTextEdit, QTimeEdit, QVBoxLayout,
 )
@@ -17,10 +19,14 @@ class PausentimerPanel(QFrame):
     BORDER = 1
     HEADER_HEIGHT = 64
     BOTTOM_PAD = 10
-    MAX_LINES = 11
-    MAX_CHARS = 50
-    FONT_PX = 11
-    LETTER_SPACING = 0.3
+    MAX_LINES = 10
+    MAX_CHARS = 54
+    # Windows zeichnet dieselbe Pixelgröße deutlich zierlicher als macOS – dort eine Stufe größer
+    FONT_PX = 13 if sys.platform.startswith("win") else 11
+    # So breit ist eine typische, volle Ansage (50 Zeichen). Ziffernreihen wie „0000…“ sind breiter als echter Text;
+    # an ihnen gemessen würde die Schrift unnötig klein.
+    FIT_SAMPLE = "Gemeindeversammlung am 12.09. um 19:30 Uhr im Saal"
+    LETTER_SPACING = 1.0
 
     start_clicked = pyqtSignal()
     end_time_changed = pyqtSignal(QTime)
@@ -83,10 +89,19 @@ class PausentimerPanel(QFrame):
         font = t.body_font()
         font.setPixelSize(self.FONT_PX)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, self.LETTER_SPACING)
-        # Die Schrift wird bei Bedarf kleiner, damit MAX_CHARS Zeichen sicher in eine Zeile passen
+        # Windows rundet Zeichenbreiten sonst auf ganze Pixel – dann passten keine 50 Zeichen und die Schrift wurde kleiner
+        # als auf dem Mac. Ohne Hinting gelten (wie am Mac) die echten Breiten.
+        font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+        # Erst den Zeichenabstand verringern, erst danach (falls nötig) die Schrift, damit MAX_CHARS Zeichen in eine Zeile passen
         inner = width - 2 * 12 - 2 if width else 0
-        while inner and font.pixelSize() > 9 and \
-                QFontMetrics(font).horizontalAdvance("0" * self.MAX_CHARS) > inner:
+        sample = self.FIT_SAMPLE
+
+        def too_wide() -> bool:
+            return bool(inner) and QFontMetricsF(font).horizontalAdvance(sample) > inner
+
+        if too_wide():
+            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0)
+        while too_wide() and font.pixelSize() > 9:
             font.setPixelSize(font.pixelSize() - 1)
         self.text_edit.setFont(font)
         self.text_edit.setToolTip("Ansagen für die Pausenfolie – eine Zeile pro Ansage")

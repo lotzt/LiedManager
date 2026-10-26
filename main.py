@@ -61,10 +61,13 @@ def main() -> int:
     permissions.ensure_at_start()  # Kamera/Mikrofon anfragen, bevor die Kameras starten
     window = MainWindow()
     window.show()
+    from services import atem
+    atem.switch("start")              # Videomischer beim Start auf Schwarz (bzw. den eingestellten Kanal)
     from services import problem_report
     problem_report.install()          # Fehler automatisch an die eigene Website melden (in den Einstellungen abschaltbar)
     from services import xair
     xair.configure()                  # Mischpult (X AIR), falls in den Einstellungen eingeschaltet
+    QTimer.singleShot(4000, window.pausentimer.warm_up)   # Windows: PowerShell für den Pausentimer schon vorab starten
     QTimer.singleShot(600, window.db.all_songs)   # Texte aller Lieder schon im Leerlauf laden, nicht erst bei der ersten Suche
     window.updates.check_on_start()   # Update-Suche im Hintergrund, nur wenn eingerichtet und nicht abgeschaltet
     window.sync.configure()           # Datenbank-Abgleich (nur wenn eine Server-Adresse eingetragen ist)
