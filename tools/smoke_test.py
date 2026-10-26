@@ -1165,7 +1165,7 @@ def main() -> int:
     assert _ccli.numbers_from_db(ccli_db) == {"p001": "7123456"}, "CCLI-Nummer muss auf Ziffern bereinigt werden"
     ccli_log = tmp / "ccli_log.txt"
     log_text = "Sonntag, 25.10.2026\r\np001 – Eins\r\n7 – Sieben\r\n8\r\n"
-    ccli_log.write_bytes(log_text.encode("utf-8"))
+    ccli_log.write_bytes(log_text.encode("utf-8"))      # Bytes: Windows würde \n sonst zu \r\n machen
 
     class _Store(dict):
         def value(self, key, default=None):
@@ -1366,7 +1366,7 @@ def main() -> int:
         assert window.sync._timer.isActive()
         assert window.sync.run_now(), "Abgleich muss im Hintergrund starten"
         deadline = time.time() + 15
-        while "Gleicht ab" in window.sync.status and time.time() < deadline:
+        while window.sync._worker is not None and time.time() < deadline:   # bis der Abgleich fertig gemeldet ist
             app.processEvents()
             time.sleep(0.02)
         settle()
