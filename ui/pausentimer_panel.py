@@ -1,6 +1,6 @@
 """Klappbarer Pausentimer-Bereich: Endzeit, Start/Stopp und Ansagen-Text."""
 from PyQt6.QtCore import QEvent, QObject, Qt, QTime, pyqtSignal
-from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QPlainTextEdit, QTimeEdit, QVBoxLayout,
 )
@@ -11,32 +11,29 @@ from ui import widgets as w
 
 DEFAULT_END_TIME = QTime(11, 30)   # Endzeit der Pause: immer wieder 11:30
 
-ANNOUNCEMENTS = [
-    "Heute gemeinsames Mittagessen",
-    "06.09. Allianzgebetsstunde",
-    "12.09. Brüderstunde 19 Uhr",
-]
 
 
 class PausentimerPanel(QFrame):
     BORDER = 1
     HEADER_HEIGHT = 64
     BOTTOM_PAD = 10
-    MAX_LINES = 10
-    MAX_CHARS = 47
+    MAX_LINES = 11
+    MAX_CHARS = 50
+    FONT_PX = 11
+    LETTER_SPACING = 0.3
 
     start_clicked = pyqtSignal()
     end_time_changed = pyqtSignal(QTime)
     toggled = pyqtSignal(bool)          # True = Ansagen-Feld ist aufgeklappt
 
-    def __init__(self, parent=None):
+    def __init__(self, width: int = 0, parent=None):
         super().__init__(parent)
         settings = app_settings()
         self._open = False
         self._running = False
 
         self.setObjectName("Pausentimer")
-        self.setStyleSheet(f"QFrame#Pausentimer {{ border-top: 1px solid {t.BORDER}; }}")
+        self.setStyleSheet(f"QFrame#Pausentimer {{ background: transparent; border: 0; border-top: 1px solid {t.BORDER}; }}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -84,7 +81,13 @@ class PausentimerPanel(QFrame):
             f"Ansagen (max. {self.MAX_LINES} Zeilen / {self.MAX_CHARS} Zeichen)"
         )
         font = t.body_font()
-        font.setPixelSize(t.FS_SMALL)
+        font.setPixelSize(self.FONT_PX)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, self.LETTER_SPACING)
+        # Die Schrift wird bei Bedarf kleiner, damit MAX_CHARS Zeichen sicher in eine Zeile passen
+        inner = width - 2 * 12 - 2 if width else 0
+        while inner and font.pixelSize() > 9 and \
+                QFontMetrics(font).horizontalAdvance("0" * self.MAX_CHARS) > inner:
+            font.setPixelSize(font.pixelSize() - 1)
         self.text_edit.setFont(font)
         self.text_edit.setToolTip("Ansagen für die Pausenfolie – eine Zeile pro Ansage")
         self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -92,15 +95,17 @@ class PausentimerPanel(QFrame):
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_edit.document().setDocumentMargin(0)
         self.text_edit.installEventFilter(self)
+        self.text_edit.viewport().installEventFilter(self)
+        for bar in (self.text_edit.verticalScrollBar(), self.text_edit.horizontalScrollBar()):
+            bar.rangeChanged.connect(lambda *_a, b=bar: b.setValue(0))
 
-        self.text_height = self.MAX_LINES * QFontMetrics(font).lineSpacing() + 2 * 8 + 2 + 2
+        self.text_height = self.MAX_LINES * QFontMetrics(font).lineSpacing() + 2 * 8 + 2 + 2 + 14   # 14 = Luft, damit nie gescrollt wird
         self.text_edit.setFixedHeight(self.text_height)
 
-        saved_text = str(settings.value("pause_text", "\n".join(ANNOUNCEMENTS)))
+        saved_text = str(settings.value("pause_text", ""))          # keine vorausgefüllten Ansagen
         self.text_edit.setPlainText(self._clamp(saved_text))
         self.text_edit.setStyleSheet(
-            t.input_style("QPlainTextEdit", "8px 12px", color=t.TEXT_SECONDARY, font_size=t.FS_SMALL)
-            + " QPlainTextEdit { letter-spacing: 0.5px; line-height: 85%; }"
+            t.input_style("QPlainTextEdit", "8px 12px", color=t.TEXT_SECONDARY, font_size=font.pixelSize())
         )
         self.text_edit.textChanged.connect(self._on_text_changed)
         self.text_edit.setVisible(False)
@@ -173,6 +178,8 @@ class PausentimerPanel(QFrame):
 
     def eventFilter(self, obj: QObject, event) -> bool:
         """Verhindert schon beim Tippen mehr als MAX_LINES Zeilen bzw. MAX_CHARS Zeichen pro Zeile."""
+        if obj in (self.text_edit, self.text_edit.viewport()) and event.type() == QEvent.Type.Wheel:
+            return True                                    # Feld wird nicht gescrollt
         if obj is self.text_edit and event.type() == QEvent.Type.KeyPress:
             cursor = self.text_edit.textCursor()
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):

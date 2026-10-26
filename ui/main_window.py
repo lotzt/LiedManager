@@ -8,17 +8,17 @@ und die Seitenleiste links mit den Reitern „Kamera“ und „Bilder“. Die ei
 import logging
 import os
 
-from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import QEvent, QRect, Qt, QTimer
+from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
     QPushButton, QStackedWidget, QWidget,
 )
 
 from database import DatabaseManager
 from paths import resolve_db_path
-from version import __version__
-from services import atem, songlog
+from services import atem, songlog, xair
+from services.gong import Gong
 from services.playback import AudioPlayback
 from services.powerpoint import PausentimerController
 from services.recorder import AudioRecorder
@@ -32,6 +32,7 @@ from ui.pausentimer_panel import PausentimerPanel
 from ui.player_panel import PlayerPanel
 from ui.presentation_window import ImagePresentationWindow
 from ui.recording_panel import RecordingPanel
+from ui.recording_upload_ui import RecordingUploader
 from ui.settings_dialog import SettingsDialog
 from ui.side_panel import TAB_IMAGES, SidePanel
 from ui.sync_ui import SyncController
@@ -49,26 +50,31 @@ class MainWindow(QMainWindow):
     AUDIO_EMPTY, AUDIO_SELECT, AUDIO_PLAYER, AUDIO_NOTFOUND = range(4)
     AUDIO_NAMES = ("Piano", "GL3")  # Anzeigenamen von Audio 1 und Audio 2
 
-    WIDTH = 420
-    PAD_X = 24
-    PAD_Y = 20
-    PANEL_H = 64
+    WIDTH = 396
+    FRAME_L, FRAME_R, FRAME_V = 6, 12, 12      # Abstand des Rahmens: links (zur Seitenleiste), rechts, oben/unten
+    FRAME_PAD = 12                             # Innenabstand im Rahmen
+    PAD_X = FRAME_L + 12                       # Inhalt beginnt 12 px im Rahmen
+    PAD_Y = FRAME_V + FRAME_PAD
+    CONTENT_W = WIDTH - PAD_X - (FRAME_R + 12)
+    PANEL_H = 58
     TITLE_H = 24
+    GAP_HINT = 0
 
     Y_SEARCH = PAD_Y
     Y_TITLE = Y_SEARCH + BTN + GAP
     Y_AUDIO = Y_TITLE + TITLE_H + GAP
     Y_REC = Y_AUDIO + PANEL_H + GAP
-    Y_PT = Y_REC + PANEL_H + GAP
+    Y_PT = Y_REC + PANEL_H + 10          # Abstand zur Trennlinie: oben, unter der Linie und unter den Knöpfen je 10 px
 
-    COLLAPSED_HEIGHT = (Y_PT + PausentimerPanel.BORDER + PausentimerPanel.HEADER_HEIGHT
-                        + PausentimerPanel.BOTTOM_PAD)
+    BOTTOM_PAD = FRAME_V                 # der Pausentimer-Kopf bringt seinen Abstand (10 px) selbst mit
+    COLLAPSED_HEIGHT = (Y_PT + PausentimerPanel.BORDER + PausentimerPanel.HEADER_HEIGHT + BOTTOM_PAD)
 
     def __init__(self):
         super().__init__()
         self._update_title()
         self.setFixedWidth(SidePanel.WIDTH + self.WIDTH)
         self.setFixedHeight(self.COLLAPSED_HEIGHT)
+        self._restore_position()
 
         self.db = DatabaseManager()
         self.presentation_window = None
@@ -79,6 +85,7 @@ class MainWindow(QMainWindow):
         self._results = []
 
         self.playback = AudioPlayback(self)
+        self.gong = Gong(self)
         self.recorder = AudioRecorder(self)
         self.pausentimer = PausentimerController(self)
 
@@ -86,6 +93,7 @@ class MainWindow(QMainWindow):
         self._connect_services()
         self._refresh_audio_section()
         self.remote = RemoteController(self)     # Steuerung über die eigene Website – startet nur, wenn eingeschaltet
+        self.uploader = RecordingUploader(self)  # Aufnahmen automatisch auf die Website laden (wenn eingeschaltet)
         self.sync = SyncController(self)         # teilt Datenbank-Änderungen über den Sync-Server (im Hintergrund)
         self.updates = UpdateController(self)   # Update-Suche (GitHub-Releases); startet erst auf Anforderung
 
@@ -118,26 +126,39 @@ class MainWindow(QMainWindow):
         row.setSpacing(0)
         row.addWidget(self.side_panel)
         row.addWidget(self.card)
-        self.side_panel.collapsed_changed.connect(self._on_side_collapsed)
-        self.side_panel.set_collapsed(app_settings().value("side_collapsed", False, type=bool))
 
         self.search_input = self._build_search_field()
         self.settings_button = w.icon_button(
             w.ICON_GEAR, t.ACCENT, 20, "Einstellungen", style=t.round_button_style()
         )
         self.settings_button.clicked.connect(self.open_settings)
+        self.gong_button = w.icon_button(
+            w.ICON_BELL, t.ACCENT, 20, "Gong abspielen", style=t.round_button_style())
+        self.gong_button.clicked.connect(self.gong.play)
         self.title_label = self._build_title_label()
         self.audio_section = self._build_audio_section()
         self.results_list = self._build_results_list()
+        # Rahmen um das Hauptfeld: gleicher Stil wie der Rahmen der Seitenleiste, endet auf derselben Höhe
+        self.main_frame = QFrame(self.card)
+        self.main_frame.setObjectName("MainFrame")
+        self.main_frame.setStyleSheet(
+            f"QFrame#MainFrame {{ background: {t.SURFACE_LOW}; border: 1px solid {t.BORDER}; "
+            f"border-radius: {t.RADIUS}px; }}")
+        self.main_frame.lower()
         self.recording_panel = RecordingPanel(self.recorder)
-        self.pausentimer_panel = PausentimerPanel()
+        self.pausentimer_panel = PausentimerPanel(width=self.CONTENT_W)
+        field_top = self.Y_PT + PausentimerPanel.BORDER + PausentimerPanel.HEADER_HEIGHT     # Oberkante des Ansagen-Textfelds im Fenster
+        self.side_panel.set_align_source(self.pausentimer_panel.title, self.pausentimer_panel.text_edit)
+        self.side_panel.set_field_span(field_top - (SidePanel.MARGIN_V + 1 + SidePanel.PAD), self.pausentimer_panel.text_height,
+                                       PausentimerPanel.HEADER_HEIGHT)
 
-        for child in (self.search_input, self.settings_button, self.title_label,
+        for child in (self.search_input, self.gong_button, self.settings_button, self.title_label,
                       self.audio_section, self.results_list, self.recording_panel,
                       self.pausentimer_panel):
             child.setParent(self.card)
         self.results_list.hide()
         self.title_label.hide()
+        self._build_empty_hint()
 
         # ESC wirkt im ganzen Hauptfenster, egal welches Element gerade den Fokus hat
         self._esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -204,6 +225,25 @@ class MainWindow(QMainWindow):
         # Einfachklick markiert nur; Doppelklick (oder Enter) wählt das Lied vor – wie bei den Bildern
         results_list.itemDoubleClicked.connect(self._on_result_clicked)
         return results_list
+
+    def _build_empty_hint(self):
+        """Ruhiger Hinweis, solange unter dem Suchfeld nichts angezeigt wird."""
+        self.empty_hint = QLabel(self.card)
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.setText(
+            "Liednummer, Titel oder Textstelle\neingeben, um ein Lied zu finden")
+        self.empty_hint.setStyleSheet(
+            f"background: transparent; border: 0; color: {t.TEXT_MUTED}; font-size: 14px;")
+        self.empty_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._hint_watched = (self.title_label, self.results_list)
+        for widget in self._hint_watched:
+            widget.installEventFilter(self)
+        self._update_empty_hint()
+
+    def _update_empty_hint(self):
+        self.empty_hint.setVisible(
+            not self.current_song_full and all(w_.isHidden() for w_ in self._hint_watched))
 
     def _build_title_label(self):
         title_label = w.ElidingLabel("")
@@ -273,11 +313,13 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
-        content_width = self.WIDTH - (2 * self.PAD_X)
+        content_width = self.CONTENT_W
         right = self.PAD_X + content_width
 
-        self.search_input.setGeometry(self.PAD_X, self.Y_SEARCH, content_width - BTN - GAP, BTN)
+        self.search_input.setGeometry(self.PAD_X, self.Y_SEARCH, content_width - 2 * (BTN + GAP), BTN)
+        self.gong_button.setGeometry(right - 2 * BTN - GAP, self.Y_SEARCH, BTN, BTN)
         self.settings_button.setGeometry(right - BTN, self.Y_SEARCH, BTN, BTN)
+        self.empty_hint.setGeometry(self.PAD_X, self.Y_TITLE, content_width, self.Y_REC - self.Y_TITLE - self.GAP_HINT)
         self.title_label.setGeometry(self.PAD_X, self.Y_TITLE, content_width, self.TITLE_H)
         self.audio_section.setGeometry(self.PAD_X, self.Y_AUDIO, content_width, self.PANEL_H)
 
@@ -285,12 +327,35 @@ class MainWindow(QMainWindow):
         self.results_list.setGeometry(self.PAD_X, self.Y_TITLE, content_width, list_h)
         self.recording_panel.setGeometry(self.PAD_X, self.Y_REC, content_width, self.PANEL_H)
 
+        self.main_frame.setGeometry(self.FRAME_L, self.FRAME_V, self.WIDTH - self.FRAME_L - self.FRAME_R,
+                                    max(0, self.height() - 2 * self.FRAME_V))
         pt_height = self.pausentimer_panel.collapsed_height()
         if self.pausentimer_panel.is_open():
             pt_height += self.pausentimer_panel.open_extra_height()
         self.pausentimer_panel.setGeometry(self.PAD_X, self.Y_PT, content_width, pt_height)
 
+    def _restore_position(self):
+        """Öffnet das Fenster dort, wo es zuletzt stand – sofern dieser Platz noch auf einem Bildschirm liegt."""
+        settings = app_settings()
+        x, y = settings.value("main_window_x", None), settings.value("main_window_y", None)
+        try:
+            x, y = int(x), int(y)
+        except (TypeError, ValueError):
+            return
+        frame = QRect(x, y, self.width(), self.height())
+        for screen in QGuiApplication.screens():
+            visible = screen.availableGeometry().intersected(frame)
+            if visible.width() >= 120 and visible.height() >= 60:       # Titelleiste muss erreichbar sein
+                self.move(x, y)
+                return
+
+    def _save_position(self):
+        settings = app_settings()
+        settings.setValue("main_window_x", self.x())
+        settings.setValue("main_window_y", self.y())
+
     def closeEvent(self, event):
+        self._save_position()
         # Laufende Aufnahme sichern, statt eine Temp-Datei zurückzulassen
         self.recorder.stop_and_save(self.recording_panel.preacher_input.text())
         self.playback.stop()
@@ -301,17 +366,31 @@ class MainWindow(QMainWindow):
             self.gallery_window.close()
         self.sync.shutdown()
         self.remote.shutdown()
+        self.uploader.shutdown()
         self.db.close()
+        xair.shutdown()
         atem.wait_idle()
         event.accept()
 
     # ------------------------------------------------------------------
     # Pausentimer
     # ------------------------------------------------------------------
+    OPEN_BOTTOM_GAP = 14
+
+    def _align_images_field(self) -> None:
+        self.side_panel.align_field(self.pausentimer_panel.text_edit)
+
     def _on_pausentimer_toggled(self, is_open: bool):
-        extra = (self.pausentimer_panel.open_extra_height() + PausentimerPanel.BOTTOM_PAD) if is_open else 0
+        self.side_panel.set_open(is_open)
+        extra = self.pausentimer_panel.open_extra_height() + self.OPEN_BOTTOM_GAP if is_open else 0   # Luft unter dem Textfeld
+        pos = self.pos()
         self.setFixedHeight(self.COLLAPSED_HEIGHT + extra)
         self.updateGeometry()
+        self.move(pos)                                         # Oberkante bleibt, das Fenster wächst nur nach unten
+        QTimer.singleShot(0, lambda: self.move(pos))
+        if is_open:
+            for delay in (80, 300):                               # nach dem Layout (und nach dem Fenster-Resize): Feld exakt auf Höhe des Textfelds
+                QTimer.singleShot(delay, self._align_images_field)
 
     def _on_pausentimer_start_clicked(self):
         if self.pausentimer.running:
@@ -327,6 +406,8 @@ class MainWindow(QMainWindow):
         self.search_input.setFocus()
 
     def eventFilter(self, obj, event):
+        if obj in getattr(self, "_hint_watched", ()) and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            QTimer.singleShot(0, self._update_empty_hint)
         if obj is self.search_input and event.type() == QEvent.Type.MouseButtonDblClick:
             self.handle_escape()  # Doppelklick ins Suchfeld = wie Esc
             return True
@@ -358,15 +439,18 @@ class MainWindow(QMainWindow):
         """ESC: schließt zuerst das Beamer-Bild, dann ein Kamera-Vollbild; sonst Audio stoppen und Suche leeren."""
         if self.gallery_window is not None and self.gallery_window.isVisible():
             self.close_gallery()  # Bilder-Galerie liegt oben -> zuerst schließen
+            atem.switch("default")
             self.focus_search()
             return
 
         if self.presentation_window is not None and self.presentation_window.isVisible():
             self.close_presentation()
+            atem.switch("default")        # der Mischer schaltet beim Schließen zurück, wie beim Schließen im Web
             self.focus_search()
             return
 
         if self.camera_panel.close_all_fullscreen():  # offenes Kamera-Vollbild zuerst schließen
+            atem.switch("default")
             self.focus_search()
             return
 
@@ -392,20 +476,7 @@ class MainWindow(QMainWindow):
     def _update_title(self):
         """Fenstertitel; im Testmodus (Lieder werden nicht gespeichert) steht das gut sichtbar dabei."""
         suffix = " – Testmodus" if songlog.is_test_mode() else ""
-        self.setWindowTitle(f"LiedManager {__version__}{suffix}")
-
-    def _on_side_collapsed(self, collapsed: bool):
-        """Kamera/Bilder ein- oder ausgeklappt: Fensterbreite anpassen und die Wahl merken."""
-        new_width = (SidePanel.COLLAPSED_WIDTH if collapsed else SidePanel.WIDTH) + self.WIDTH
-        old_width = self.maximumWidth()
-        self.setFixedWidth(new_width)
-        if self.isVisible() and old_width != new_width:
-            x = self.x() + old_width - new_width            # die rechte Kante bleibt stehen: es klappt nach links aus
-            screen = self.screen()
-            if screen is not None:
-                x = max(x, screen.availableGeometry().left())    # nie links aus dem Bildschirm heraus
-            self.move(x, self.y())
-        app_settings().setValue("side_collapsed", collapsed)
+        self.setWindowTitle(f"LiedManager{suffix}")
 
     def open_settings(self):
         dialog = SettingsDialog(self, updates_available=self.updates.available)
@@ -416,19 +487,24 @@ class MainWindow(QMainWindow):
         dialog.set_sync_status(self.sync.status)
         self.sync.status_changed.connect(dialog.set_sync_status)
         dialog.set_site_status(self.remote.site_status)
+        dialog.set_upload_status(self.uploader.status)
+        self.uploader.status_changed.connect(dialog.set_upload_status)
         self.remote.site_status_changed.connect(dialog.set_site_status)
         accepted = dialog.exec()
         self.remote.site_status_changed.disconnect(dialog.set_site_status)
+        self.uploader.status_changed.disconnect(dialog.set_upload_status)
         self.updates.status_changed.disconnect(dialog.set_update_status)
         self.sync.status_changed.disconnect(dialog.set_sync_status)
         if accepted:
             self._update_title()
             self.camera_panel.update_streams_from_settings()
             self.playback.apply_output_device()
+            self.gong.apply_output_device()
             self._reload_database_if_changed()
             self.sync.configure()
             self.sync.run_now()
             self.remote.configure()
+            self.uploader.configure()
 
     def _reload_database_if_changed(self):
         """Lädt die Datenbank neu, wenn in den Einstellungen eine andere ausgewählt wurde."""
@@ -569,7 +645,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def add_images(self, paths):
         """Bilder (oder Ordner voller Bilder) in die Ablage legen und auf den Reiter „Bilder“ wechseln."""
-        added, failed = self.images_panel.add_paths(paths)
+        try:
+            added, failed = self.images_panel.add_paths(paths)
+        except Exception as exc:                          # nie stillschweigend scheitern
+            log.exception("Bilder konnten nicht hinzugefügt werden")
+            QMessageBox.warning(self, "Bilder", f"Die Bilder konnten nicht hinzugefügt werden:\n{exc}")
+            return
         if added:
             self.side_panel.show_tab(TAB_IMAGES)
         if failed:
@@ -602,12 +683,16 @@ class MainWindow(QMainWindow):
 
         ``keep``: "presentation", "gallery" oder "camera" – das, was gleich neu angezeigt wird und deshalb bleibt.
         """
+        was_showing = (any(w is not None and w.isVisible() for w in (self.presentation_window, self.gallery_window))
+                       or bool(self.camera_panel.fullscreen_indices()))
         if keep != "presentation":
             self.close_presentation()
         if keep != "gallery":
             self.close_gallery()
         if keep != "camera":
             self.camera_panel.close_all_fullscreen()
+        if keep is None and was_showing:
+            atem.switch("default")        # Beamer ist leer: Mischer zurück auf den Standardkanal
 
     def close_gallery(self):
         if self.gallery_window is not None:
@@ -651,6 +736,7 @@ class MainWindow(QMainWindow):
         return data if data and isinstance(data, (bytes, bytearray)) else None
 
     def _refresh_audio_section(self):
+        self._update_empty_hint()
         if not self.current_song_full:
             self._set_audio_state(self.AUDIO_EMPTY)
             return

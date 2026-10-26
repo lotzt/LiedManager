@@ -18,10 +18,10 @@ from PyQt6.QtCore import QBuffer, QIODevice, QObject, QSize, Qt, QTime, pyqtSign
 from PyQt6.QtGui import QImageReader
 
 from paths import user_data_dir
-from services import atem
+from services import atem, xair
 from services.recorder import IDLE
 from services.remote_common import RemoteError
-from services.remote_relay import RelayClient
+from services.remote_relay import KEY_DEVICE_NAME, RelayClient, device_name, forget_old_name  # noqa: F401  (auch für den Einstellungsdialog)
 from services.settings import app_settings
 from services.web_remote_page import REQUIRED_VALUES
 from ui import theme
@@ -117,17 +117,18 @@ class RemoteController(QObject):
             self._stop_site()
             self._set_site_status(STATUS_OFF)
             return
-        signature = (self.site_url(), self.site_token())
+        signature = (self.site_url(), self.site_token(), device_name())
         if self._relay is not None and self._relay.running and signature == self._site_signature:
             return
         self._stop_site()
-        client = RelayClient(signature[0], signature[1], self, on_status=self._set_site_status)
+        client = RelayClient(signature[0], signature[1], self, on_status=self._set_site_status, device=signature[2])
         error = client.start()
         if error:
             self._set_site_status(f"Nicht gestartet – {error}")
             return
         self._relay = client
         self._site_signature = signature
+        threading.Thread(target=forget_old_name, args=signature, name="device-rename", daemon=True).start()
 
     def _stop_site(self) -> None:
         client, self._relay = self._relay, None
@@ -296,7 +297,10 @@ class RemoteController(QObject):
                                  for p in paths]},
             "gallery": ({"index": gallery.current_index, "count": gallery.image_count} if gallery is not None else None),
             "cameras": cameras,
-            "atem": {"enabled": bool(settings.value("atem_enabled", False, type=bool))},
+            "atem": {"enabled": bool(settings.value("atem_enabled", False, type=bool)),
+                     "channels": {kind: settings.value(key, default, type=int)
+                                  for kind, (key, default) in atem.CHANNELS.items()}},
+            "mixer": xair.state(),
             "sync": {"enabled": w.sync.enabled(), "status": w.sync.status},
         }
 
@@ -419,6 +423,35 @@ class RemoteController(QObject):
         atem.switch(kind)
         return {"ok": True}
 
+    def _mixer(self):
+        mixer = xair.mixer()
+        if mixer is None:
+            raise RemoteError("Das Mischpult ist in den Einstellungen nicht eingeschaltet.", 409)
+        return mixer
+
+    def _act_mixer_level(self, args: dict) -> dict:
+        try:
+            self._mixer().set_level(int(args.get("channel", 0)), float(args.get("level", 0)))
+        except (TypeError, ValueError):
+            raise RemoteError("Ungültiger Kanal oder Wert.", 400)
+        return {"ok": True}
+
+    def _act_mixer_mute(self, args: dict) -> dict:
+        try:
+            self._mixer().set_mute(int(args.get("channel", 0)), bool(args.get("mute", True)))
+        except (TypeError, ValueError):
+            raise RemoteError("Ungültiger Kanal.", 400)
+        return {"ok": True}
+
+    def _act_mixer_mute_all(self, args: dict) -> dict:
+        self._mixer().mute_all()
+        return {"ok": True}
+
+    def _act_gong(self, args: dict) -> dict:
+        if not self.window.gong.play():
+            raise RemoteError("Die Gong-Datei fehlt.", 409)
+        return {"ok": True}
+
     def _act_pause_set(self, args: dict) -> dict:
         panel = self.window.pausentimer_panel
         lines = args.get("lines", [])
@@ -440,5 +473,5 @@ class RemoteController(QObject):
     def _act_sync_now(self, args: dict) -> dict:
         if not self.window.sync.enabled():
             raise RemoteError("Der Abgleich ist nicht eingerichtet.", 409)
-        self.window.sync.run_now()
+        self.window.sync.run_now(manual=True)
         return {"ok": True}

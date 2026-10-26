@@ -17,8 +17,9 @@ class PlayerPanel(QFrame):
         self.setStyleSheet(t.panel_style("PlayerPanel"))
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(8, 6, 8, 6)       # 58 − 2 (Rahmen) − 12 = 44 = Knopfhöhe: Knöpfe exakt mittig
         layout.setSpacing(t.GAP)
+        vcenter = Qt.AlignmentFlag.AlignVCenter
 
         self.play_pause_btn = QPushButton()
         self.play_pause_btn.setFixedSize(t.BTN, t.BTN)
@@ -27,7 +28,7 @@ class PlayerPanel(QFrame):
         self.play_pause_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.play_pause_btn.setStyleSheet(t.round_button_style())
         self.play_pause_btn.clicked.connect(self.toggle_requested)
-        layout.addWidget(self.play_pause_btn)
+        layout.addWidget(self.play_pause_btn, 0, vcenter)
         self.set_playing(False)
 
         column = QVBoxLayout()
@@ -46,7 +47,7 @@ class PlayerPanel(QFrame):
 
         stop_btn = w.icon_button(w.ICON_STOP, t.ACCENT_LIGHT, 14, "Wiedergabe beenden")
         stop_btn.clicked.connect(self.stop_requested)
-        layout.addWidget(stop_btn)
+        layout.addWidget(stop_btn, 0, vcenter)
 
     def set_track_name(self, text: str) -> None:
         self.track_name_label.setText(text)

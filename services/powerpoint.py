@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 
 from PyQt6.QtCore import QObject, QProcess, QTime, QTimer, pyqtSignal
 
@@ -98,10 +99,54 @@ def write_announcements(pptx_path: str, lines) -> None:
     prs.save(pptx_path)
 
 
-_OPEN_SCRIPT = '''
+# Es soll nur die Präsentation zu sehen sein – ohne Referentenansicht und ohne Bearbeitungsfenster.
+# macOS: Das Bearbeitungsfenster lässt sich bei PowerPoint nicht abschalten. Es wird deshalb klein hinter die laufende
+# Bildschirmpräsentation geschoben (dort ist es verdeckt und erscheint nicht im Dock). Klappt das nicht, wird es wie
+# bisher minimiert. Die Befehle laufen als Text-Skript in „try“: kennt eine PowerPoint-Version einen Begriff nicht, wird
+# er übergangen, statt dass der Pausentimer nicht startet.
+def _applescript_literal(text: str) -> str:
+    """Mehrzeiliges AppleScript als Zeichenketten-Ausdruck (für „run script“)."""
+    lines = [line.replace("\\", "\\\\").replace('"', '\\"') for line in text.strip().splitlines()]
+    return '"' + '" & linefeed & "'.join(lines) + '"'
+
+
+_HIDE_DOCS_INNER = """
+tell application "Microsoft PowerPoint"
+    set moved to false
+    try
+        set b to bounds of slide show window 1
+        set x to item 1 of b
+        set y to item 2 of b
+        repeat with w in (get every document window)
+            set bounds of w to {x + 40, y + 40, x + 640, y + 440}
+        end repeat
+        set moved to true
+    end try
+    if not moved then
+        repeat with w in (get every window)
+            try
+                set window state of w to minimized
+            end try
+        end repeat
+    end if
+end tell
+"""
+_MINIMIZE_ALL = f"""
+    try
+        run script {_applescript_literal(_HIDE_DOCS_INNER)}
+    end try
+""".replace("{", "{{").replace("}", "}}")     # die Skripte darunter werden mit .format() gefüllt
+
+_OPEN_SCRIPT = r'''
 tell application "Microsoft PowerPoint"
     open POSIX file "{path}"
+    try
+        run script "tell application \"Microsoft PowerPoint\" to set show presenter view of slide show settings of active presentation to false"
+    end try
     run slide show slide show settings of active presentation
+''' + _MINIMIZE_ALL + r'''
+    delay 0.8
+''' + _MINIMIZE_ALL + r'''
 end tell
 '''
 
@@ -118,7 +163,7 @@ _GOTO_SCRIPT = '''
 tell application "Microsoft PowerPoint"
     if (count of slide show windows) is 0 then return "wait"
     set theView to slide show view of slide show window 1
-    try
+''' + _MINIMIZE_ALL + r'''    try
         go to slide theView number {slide}
         return "ok"
     on error errMsg1
@@ -137,12 +182,28 @@ end tell
 
 
 # --- Windows: PowerShell + PowerPoint-COM (ohne zusätzliche Pakete) ---
+# Präsentation ohne Bearbeitungsfenster öffnen (Presentations.Open … WithWindow = 0). Danach wird das (leere) PowerPoint-
+# Hauptfenster versteckt und das Präsentationsfenster als „Werkzeugfenster“ markiert: Es läuft weiter auf dem Beamer,
+# erscheint aber weder in der Taskleiste noch bei Alt+Tab. Schlägt etwas davon fehl, läuft die Präsentation trotzdem.
+_PS_HIDE = (
+    "try { if (-not ('LM.Win' -as [type])) { Add-Type -Namespace LM -Name Win -MemberDefinition "
+    "'[DllImport(\"user32.dll\")] public static extern int GetWindowLong(IntPtr h, int i); "
+    "[DllImport(\"user32.dll\")] public static extern int SetWindowLong(IntPtr h, int i, int v); "
+    "[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c);' }; "
+    "try { $app = [IntPtr][int]$ppt.HWND; if ($app -ne [IntPtr]::Zero) { [LM.Win]::ShowWindow($app, 0) | Out-Null } } catch {}; "
+    "if ($ppt.SlideShowWindows.Count -gt 0) { $h = [IntPtr][int]$ppt.SlideShowWindows.Item(1).HWND; "
+    "$ex = [LM.Win]::GetWindowLong($h, -20); [LM.Win]::ShowWindow($h, 0) | Out-Null; "
+    "[LM.Win]::SetWindowLong($h, -20, (($ex -bor 0x80) -band (-bnot 0x40000))) | Out-Null; "
+    "[LM.Win]::ShowWindow($h, 5) | Out-Null } } catch {}"
+)
 _PS_OPEN = """
 $ErrorActionPreference = 'Stop'
 try {{
   $ppt = New-Object -ComObject PowerPoint.Application
-  $pres = $ppt.Presentations.Open('{path}', 0, 0, -1)
+  $pres = $ppt.Presentations.Open('{path}', 0, 0, 0)
+  try {{ $pres.SlideShowSettings.ShowPresenterView = 0 }} catch {{}}
   $pres.SlideShowSettings.Run() | Out-Null
+  {hide}
   exit 0
 }} catch {{ Write-Output $_.Exception.Message; exit 1 }}
 """
@@ -167,30 +228,135 @@ try {{
 """
 
 
+def _hide_console(process: QProcess) -> None:
+    """Windows: kein kurz aufblitzendes Konsolenfenster beim Start von PowerShell (auf dem Mac ohne Wirkung)."""
+    if not sys.platform.startswith("win"):
+        return
+    def no_window(arguments):
+        arguments.flags |= 0x08000000  # CREATE_NO_WINDOW
+    try:
+        process.setCreateProcessArgumentsModifier(no_window)
+    except (AttributeError, TypeError):  # nur unter Windows vorhanden
+        pass
+
+
 def supported() -> bool:
     return sys.platform == "darwin" or sys.platform.startswith("win")
 
 
-def _command(mac_script: str, ps_script: str):
+class _Command(tuple):
+    """(Programm, Argumente); unter Windows zusätzlich ``session_script``: dasselbe als Einzeiler für die dauerhafte PowerShell."""
+    session_script = ""
+
+
+def _command(mac_script: str, ps_script: str, session_script: str = ""):
     """(Programm, Argumente) für das jeweilige Betriebssystem."""
     if sys.platform == "darwin":
-        return "osascript", ["-e", mac_script]
+        return _Command(("osascript", ["-e", mac_script]))
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
-    return "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                              "-EncodedCommand", encoded]
+    command = _Command(("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                           "-EncodedCommand", encoded]))
+    command.session_script = session_script
+    return command
+
+
+# Dieselben Schritte als Einzeiler für die dauerhaft laufende PowerShell (ohne „exit“, Fehler werden abgefangen).
+_SESSION_OPEN = ("$ErrorActionPreference = 'Stop'; $ppt = New-Object -ComObject PowerPoint.Application; "
+                 "$pres = $ppt.Presentations.Open('{path}', 0, 0, 0); "
+                 "try {{ $pres.SlideShowSettings.ShowPresenterView = 0 }} catch {{}}; "
+                 "$pres.SlideShowSettings.Run() | Out-Null; {hide}")
+_SESSION_CLOSE = ("try {{ $ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application'); "
+                  "foreach ($p in @($ppt.Presentations)) {{ $p.Saved = -1; $p.Close() }}; $ppt.Quit() }} catch {{}}")
+_SESSION_GOTO = ("$ErrorActionPreference = 'Stop'; "
+                 "$ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application'); "
+                 "if ($ppt.SlideShowWindows.Count -eq 0) {{ Write-Output 'wait' }} else "
+                 "{{ $ppt.SlideShowWindows.Item(1).View.GotoSlide({slide}); Write-Output 'ok' }}")
 
 
 def open_command(path: str):
     ps_path = path.replace("'", "''")
-    return _command(_OPEN_SCRIPT.format(path=path), _PS_OPEN.format(path=ps_path))
+    return _command(_OPEN_SCRIPT.format(path=path), _PS_OPEN.format(path=ps_path, hide=_PS_HIDE),
+                    _SESSION_OPEN.format(path=ps_path, hide=_PS_HIDE))
 
 
 def close_command():
-    return _command(_CLOSE_SCRIPT, _PS_CLOSE)
+    return _command(_CLOSE_SCRIPT, _PS_CLOSE, _SESSION_CLOSE.format())
 
 
 def goto_command(slide: int):
-    return _command(_GOTO_SCRIPT.format(slide=slide, steps=slide - 1), _PS_GOTO.format(slide=slide))
+    return _command(_GOTO_SCRIPT.format(slide=slide, steps=slide - 1), _PS_GOTO.format(slide=slide),
+                    _SESSION_GOTO.format(slide=slide))
+
+
+SESSION_MARKER = "__LM_DONE__"
+
+
+class _PowerShellSession(QObject):
+    """Eine dauerhaft laufende PowerShell (Windows): spart den Start von ``powershell.exe`` bei jedem Folienwechsel (0,5–1 s).
+
+    Jeder Befehl ist ein Einzeiler; danach schreibt die Sitzung eine Marke mit dem Ergebnis (0 = gut). Die Antwort wird bis zur
+    Marke gesammelt. Stirbt der Prozess oder reagiert er nicht, räumt der Aufrufer ihn ab; der nächste Befehl startet neu.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._process = None
+        self._buffer = ""
+        self._callback = None
+
+    def ensure(self) -> bool:
+        process = self._process
+        if process is not None and process.state() != QProcess.ProcessState.NotRunning:
+            return True
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        _hide_console(process)
+        process.readyReadStandardOutput.connect(self._on_output)
+        process.finished.connect(self._on_died)
+        process.errorOccurred.connect(lambda err: self._on_died() if err == QProcess.ProcessError.FailedToStart else None)
+        process.start("powershell.exe", ["-NoProfile", "-NoLogo", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                         "-Command", "-"])
+        if not process.waitForStarted(5000):
+            process.deleteLater()
+            return False
+        self._process = process
+        self._buffer = ""
+        return True
+
+    def submit(self, one_liner: str, callback) -> None:
+        self._buffer = ""
+        self._callback = callback
+        line = (f"$lmcode = 0; try {{ {one_liner} }} catch {{ Write-Output $_.Exception.Message; $lmcode = 1 }}; "
+                f"Write-Output \"{SESSION_MARKER}$lmcode\"\n")
+        self._process.write(line.encode("utf-8"))
+
+    def _on_output(self) -> None:
+        if self._process is None:
+            return
+        self._buffer += bytes(self._process.readAllStandardOutput()).decode("utf-8", "replace")
+        if SESSION_MARKER not in self._buffer:
+            return
+        text, _, rest = self._buffer.partition(SESSION_MARKER)
+        code = rest.strip().splitlines()[0].strip() if rest.strip() else "1"
+        self._buffer = ""
+        callback, self._callback = self._callback, None
+        if callback is not None:
+            callback(code == "0", text.strip())
+
+    def _on_died(self, *_args) -> None:
+        callback, self._callback = self._callback, None
+        if callback is not None:
+            callback(False, "PowerShell wurde beendet")
+
+    def kill(self) -> None:
+        process, self._process = self._process, None
+        self._callback = None
+        if process is not None:
+            try:
+                process.finished.disconnect()
+            except TypeError:
+                pass
+            process.kill()
+            process.deleteLater()
 
 
 class PausentimerController(QObject):
@@ -202,10 +368,14 @@ class PausentimerController(QObject):
     """
     running_changed = pyqtSignal(bool)
     error = pyqtSignal(str)
+    _prepared = pyqtSignal(str, str)     # (Pfad der vorbereiteten Datei, Fehlertext) – vom Vorbereitungs-Thread
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running = False
+        self._preparing = False          # Vorlage wird gerade im Hintergrund vorbereitet
+        self._start_cancelled = False
+        self._start_args = ()
         self._end_time = QTime(11, 30)
         self._finish = None
         self._slide = None
@@ -215,6 +385,9 @@ class PausentimerController(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(250)   # nur zum Prüfen; ein Skript läuft erst, wenn sich die Folie ändern muss
         self._timer.timeout.connect(self._check_slide)
+        self._prepared.connect(self._on_prepared)
+        self._session = None             # dauerhafte PowerShell (Windows)
+        self._session_failures = 0       # drei Fehler in Folge: zurück zum Einzelstart je Befehl
 
     @property
     def running(self) -> bool:
@@ -230,7 +403,7 @@ class PausentimerController(QObject):
     # Öffentliche Steuerung
     # ------------------------------------------------------------------
     def start(self, lines, end_time: QTime) -> None:
-        if self._running:
+        if self._running or self._preparing:
             return
         if not supported():
             self.error.emit("Der Pausentimer wird nur unter macOS und Windows unterstützt.")
@@ -242,37 +415,60 @@ class PausentimerController(QObject):
                             f"den Ordner\n{source.parent}\n(Einstellungen → Anzeige → „Ordner für Pausenfolien öffnen“).")
             return
 
-        try:
-            temp_path = os.path.join(tempfile.gettempdir(), f"pausentimer_temp_{season}.pptx")
-            shutil.copy(source, temp_path)
-            try:
-                write_announcements(temp_path, lines)
-            except Exception as exc:  # fehlerhafte Ansagen sollen den Start nicht verhindern
-                log.warning("Ansagen konnten nicht in die Vorlage geschrieben werden: %s", exc)
-        except OSError as exc:
-            self.error.emit(f"Die Vorlage konnte nicht vorbereitet werden:\n{exc}")
-            return
+        self._preparing = True
+        self._start_args = (end_time,)
+        lines = list(lines)
 
+        def prepare():                           # Kopieren und Ansagen eintragen (kann bei großen Vorlagen Sekunden dauern)
+            try:
+                temp_path = os.path.join(tempfile.gettempdir(), f"pausentimer_temp_{season}.pptx")
+                shutil.copy(source, temp_path)
+                try:
+                    write_announcements(temp_path, lines)
+                except Exception as exc:  # fehlerhafte Ansagen sollen den Start nicht verhindern
+                    log.warning("Ansagen konnten nicht in die Vorlage geschrieben werden: %s", exc)
+                self._prepared.emit(temp_path, "")
+            except OSError as exc:
+                self._prepared.emit("", str(exc))
+
+        threading.Thread(target=prepare, name="pausentimer-prepare", daemon=True).start()
+
+    def _on_prepared(self, temp_path: str, problem: str) -> None:
+        self._preparing = False
+        if self._start_cancelled:
+            self._start_cancelled = False
+            return
+        if problem:
+            self.error.emit(f"Die Vorlage konnte nicht vorbereitet werden:\n{problem}")
+            return
+        (end_time,) = self._start_args
         atem.switch("presentation")
         self._end_time = end_time
         self._finish = self._compute_finish()
         self._slide = None
         self._running = True
         power.keep_awake()    # Rechner/Beamer nicht einschlafen lassen, Programm im Hintergrund nicht drosseln
-        power.exempt_from_app_nap(power.POWERPOINT_BUNDLE_ID)   # auch PowerPoint im Hintergrund nicht drosseln
+        threading.Thread(target=power.exempt_from_app_nap, args=(power.POWERPOINT_BUNDLE_ID,),
+                         name="app-nap", daemon=True).start()     # „defaults write“ nicht im Hauptthread
         self.running_changed.emit(True)
 
         self._run_script(open_command(os.path.abspath(temp_path)), self._on_open_finished,
                          timeout_ms=OPEN_TIMEOUT_MS)
 
     def stop(self) -> None:
+        if self._preparing:
+            self._start_cancelled = True          # Start läuft noch im Hintergrund: danach nichts mehr öffnen
+            return
         if not self._running:
             return
         self._timer.stop()
         self._running = False
         self._slide = None
         power.release()
-        self._run_script(close_command(), lambda ok, out: None)
+        def closed(ok, out):
+            if self._session is not None and not self._running:
+                self._session.kill()                   # PowerShell-Sitzung beenden, solange keine Präsentation läuft
+        self._run_script(close_command(), closed)
         self.running_changed.emit(False)
         atem.switch("default")
 
@@ -328,21 +524,53 @@ class PausentimerController(QObject):
 
         self._run_script(goto_command(target), done)
 
+    def _run_in_session(self, script: str, callback, timeout_ms: int) -> bool:
+        """Windows: Befehl in der dauerhaften PowerShell ausführen. ``False``: Sitzung nicht verfügbar, bitte klassisch starten."""
+        if self._session is None:
+            self._session = _PowerShellSession(self)
+        if not self._session.ensure():
+            self._session_failures += 1
+            return False
+        state = {"called": False}
+        self._script_busy = True
+        watchdog = QTimer(self)
+        watchdog.setSingleShot(True)
+        watchdog.setInterval(timeout_ms)
+
+        def finish(ok: bool, output: str) -> None:
+            if state["called"]:
+                return
+            state["called"] = True
+            watchdog.stop()
+            watchdog.deleteLater()
+            self._script_busy = False
+            self._session_failures = 0 if ok or output not in ("PowerShell wurde beendet", "Zeitüberschreitung") else \
+                self._session_failures + 1
+            callback(ok, output)
+
+        def on_timeout() -> None:
+            log.warning("PowerShell-Sitzung reagiert nicht (%.1f s) – wird neu gestartet.", timeout_ms / 1000)
+            self._session.kill()
+            finish(False, "Zeitüberschreitung")
+
+        watchdog.timeout.connect(on_timeout)
+        watchdog.start()
+        self._session.submit(script, finish)
+        return True
+
     def _run_script(self, command, callback, timeout_ms: int = SCRIPT_TIMEOUT_MS) -> None:
         """Führt (Programm, Argumente) asynchron aus; ``callback(ok, stdout)`` wird genau einmal aufgerufen.
 
         Hängt das Skript länger als ``timeout_ms`` (z. B. PowerPoint antwortet nicht), wird es beendet und als
         Fehler gemeldet. Sonst bliebe ``_script_busy`` für immer gesetzt und es gäbe keine Folienwechsel mehr.
         """
+        script = getattr(command, "session_script", "")
+        if script and sys.platform.startswith("win") and self._session_failures < 3 and self._run_in_session(
+                script, callback, timeout_ms):
+            return
         program, args = command
         process = QProcess(self)
-        if sys.platform.startswith("win"):  # kein kurz aufblitzendes Konsolenfenster
-            try:
-                def no_window(arguments):
-                    arguments.flags |= 0x08000000  # CREATE_NO_WINDOW
-                process.setCreateProcessArgumentsModifier(no_window)
-            except Exception:
-                pass
+        _hide_console(process)
         state = {"called": False}
         self._script_busy = True
 

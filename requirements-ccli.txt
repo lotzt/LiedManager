@@ -1,0 +1,2 @@
+# Für „Bei CCLI melden“ (kommt auch in die fertige App, siehe release.yml). Genutzt wird der installierte Google Chrome bzw. Microsoft Edge (kein „playwright install“ nötig).
+playwright

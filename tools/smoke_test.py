@@ -119,7 +119,8 @@ def test_updater_logic(tmp: Path) -> None:
         assert seen and seen[-1][0] == len(payload)
 
         from dataclasses import replace
-        for broken, expected in ((replace(info, sha256="0" * 64), "Prüfsumme"), (replace(info, size=len(payload) + 1), "unvollständig")):
+        for broken, expected in ((replace(info, sha256="0" * 64), "Prüfsumme"), (replace(info, sha256=""), "Prüfsumme"),
+                                 (replace(info, size=len(payload) + 1), "unvollständig")):
             try:
                 up.download(broken, dest)
             except up.UpdateError as exc:
@@ -153,6 +154,7 @@ class FakeSyncServer:
         self.rows = {}        # key -> dict(ts, dev, hash, deleted, seq, data)
         self.counter = 0
         self.pushes = 0
+        self.parts, self.part_sizes = {}, []
         self.reject = set()   # Schlüssel, die der Server mit „zu groß“ ablehnt
         fake = self
 
@@ -181,8 +183,17 @@ class FakeSyncServer:
                     return self._send(200, {"format": 1, "max": fake.counter, "more": more, "items": [
                         {"k": r["key"], "ts": r["ts"], "dev": r["dev"], "deleted": r["deleted"], "seq": r["seq"]}
                         for r in items]})
+                if action == "push_part":
+                    fake.parts[(data["uid"], data["idx"])] = data["data"]
+                    fake.part_sizes.append(len(data["data"]))
+                    return self._send(200, {"ok": True})
+                if action == "get_part":
+                    part = fake.parts.get((data["uid"], data["idx"]))
+                    return self._send(200, {"data": part}) if part is not None else self._send(404, {"error": "fehlt"})
                 if action == "get":
                     row = fake.rows.get(data.get("key"))
+                    if row and row.get("uid"):
+                        return self._send(200, {"row": dict(row, k=row["key"], data=None, parts=row["parts"])})
                     return self._send(200, {"row": dict(row, k=row["key"]) if row else None})
                 if action == "push":
                     fake.pushes += 1
@@ -192,10 +203,13 @@ class FakeSyncServer:
                     old = fake.rows.get(key)
                     if old and (old["ts"], old["dev"]) >= (data["ts"], data["dev"]):
                         return self._send(200, {"accepted": False})
+                    if data.get("parts") and any((data["uid"], i) not in fake.parts for i in range(data["parts"])):
+                        return self._send(400, {"error": "Teile des Liedes fehlen."})
                     fake.counter += 1
                     fake.rows[key] = {"key": key, "ts": data["ts"], "dev": data["dev"], "hash": data["hash"],
                                       "deleted": 1 if data.get("deleted") else 0, "seq": fake.counter,
-                                      "data": None if data.get("deleted") else data["data"]}
+                                      "data": None if data.get("deleted") else data.get("data"),
+                                      "uid": data.get("uid"), "parts": data.get("parts")}
                     return self._send(200, {"accepted": True, "seq": fake.counter})
                 return self._send(400, {"error": "Unbekannte Aktion."})
 
@@ -204,7 +218,8 @@ class FakeSyncServer:
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def stored_bytes(self) -> int:
-        return sum(len(r["data"] or "") for r in self.rows.values())
+        return (sum(len(r["data"] or "") for r in self.rows.values())
+                + sum(len(p) for p in self.parts.values()))
 
     def stop(self):
         self.httpd.shutdown()
@@ -345,8 +360,11 @@ def test_server_sync(tmp: Path) -> None:
         edit(c_db, "DELETE FROM Data WHERE nummer = 'p003'")
         edit(c_db, "UPDATE Data SET titel = 'Eins aus der neuen Datenbank' WHERE nummer = 'p001'")
         edit(c_db, "INSERT INTO Data (nummer, titel, lyrics) VALUES ('p009', 'Neun', 'Text 9')")
-        forced = ss.ServerSync(c_db, server.url, FakeSyncServer.TOKEN, work / "C_state.db", now_ms=tick, force_upload=True)
+        steps = []
+        forced = ss.ServerSync(c_db, server.url, FakeSyncServer.TOKEN, work / "C_state.db", now_ms=tick, force_upload=True,
+                               on_progress=lambda done, total: steps.append((done, total)))
         r = forced.run_once()
+        assert steps and steps[-1][0] == steps[-1][1] > 0 and steps == sorted(steps), f"Fortschritt unplausibel: {steps}"
         assert r.ok and r.forced and r.sent >= 4 and "Stand für alle Geräte gesetzt" in r.text(), r
         dev_a.run_once()
         dev_b.run_once()
@@ -371,6 +389,49 @@ def test_server_sync(tmp: Path) -> None:
         r = dev_a.run_once()
         assert r.ok and r.failed == 1 and server.pushes == pushes, "abgelehntes Lied darf nicht dauernd neu hochgeladen werden"
         server.reject.clear()
+        retry = ss.ServerSync(a_db, server.url, FakeSyncServer.TOKEN, work / "A_state.db", now_ms=tick, retry_failed=True)
+        r = retry.run_once()
+        assert r.ok and r.failed == 0 and r.sent == 1, f"manueller Abgleich muss abgelehnte Lieder sofort erneut senden: {r}"
+        dev_a.run_once()                                   # Zwischenstand: das „zu groß“-Lied erneut versuchen lassen
+        # Großes Lied wird in Teilen hochgeladen und beim Empfänger wieder zusammengesetzt
+        old_part = ss.PART_BYTES
+        ss.PART_BYTES = 100_000
+        try:
+            edit(a_db, "UPDATE Data SET audio1 = ?, lyrics = 'mit großem Audio' WHERE nummer = 'p004'", (os.urandom(900_000),))
+            server.part_sizes.clear()
+            r = dev_a.run_once()
+            assert r.ok and r.sent == 1, r
+            assert len(server.part_sizes) >= 10 and max(server.part_sizes) <= 100_000, server.part_sizes
+            assert server.rows["p004"]["data"] is None and server.rows["p004"]["parts"] == len(server.part_sizes)
+            r = dev_b.run_once()
+            assert r.ok and r.received == 1, r
+            assert dump(a_db) == dump(b_db), "großes Lied muss nach dem Zusammensetzen identisch ankommen"
+        finally:
+            ss.PART_BYTES = old_part
+        dev_a.run_once()
+
+        # CCLI-Nummern: Gerät A bekommt eine Spalte und eine Nummer; Gerät B (ohne Spalte) übernimmt sie, auch das Löschen.
+        # Lieder ohne CCLI-Nummer behalten ihren Fingerabdruck – es wird nichts unnötig neu gesendet.
+        assert dev_a.run_once().sent == 0 and dev_b.run_once().sent == 0
+        edit(a_db, "ALTER TABLE Data ADD COLUMN CCLI TEXT")
+        r = dev_a.run_once()
+        assert r.ok and r.sent == 0, f"leere CCLI-Spalte darf nichts auslösen: {r}"
+        edit(a_db, "UPDATE Data SET CCLI = ' 123 456 ' WHERE nummer = 'p001'")
+        r = dev_a.run_once()
+        assert r.ok and r.sent == 1, r
+        r = dev_b.run_once()
+        assert r.ok and r.received == 1, r
+        con = sqlite3.connect(b_db)
+        assert con.execute("SELECT CCLI FROM Data WHERE nummer = 'p001'").fetchone() == ("123456",), "CCLI nicht bei B angekommen"
+        con.close()
+        assert dev_b.run_once().sent == 0, "Übernahme darf nicht zurückgespielt werden"
+        edit(a_db, "UPDATE Data SET CCLI = NULL WHERE nummer = 'p001'")
+        assert dev_a.run_once().sent == 1
+        dev_b.run_once()
+        con = sqlite3.connect(b_db)
+        assert con.execute("SELECT CCLI FROM Data WHERE nummer = 'p001'").fetchone() == (None,), "Löschen kam nicht an"
+        con.close()
+        assert dev_b.run_once().sent == 0
 
         # Falsches Token, geleerter Server
         r = device(a_db, "A", token="falsch").run_once()
@@ -600,6 +661,158 @@ def test_remote_site() -> None:
     assert "die du in der Datei remote.php festgelegt hast" in committed, "Anmeldetext der Website-Ausführung fehlt"
 
 
+def test_history_and_problem_report(tmp) -> None:
+    """Liedhistorie (Datei lesen/suchen/zählen) und automatische Problemmeldung (Entdoppeln, Warteschlange, Datenschutz)."""
+    import tempfile
+    from pathlib import Path
+
+    from services import history, problem_report
+
+    file = Path(tempfile.mkdtemp(dir=str(tmp))) / "g.txt"
+    file.write_text("Sonntag, 18.10.2026\r\n12 – Großer Gott\r\n\r\nSonntag, 25.10.2026\r\n12 – Großer Gott\r\n99\r\n", encoding="utf-8")
+    days = history.read(file)
+    assert [d[0] for d in days] == ["Sonntag, 25.10.2026", "Sonntag, 18.10.2026"], days
+    assert history.top_songs(days)[0] == ("12", "Großer Gott", 2)
+    assert len(history.filter_days(days, "groß")) == 2 and history.filter_days(days, "zzz") == []
+    assert "anna" not in problem_report.scrub("/Users/anna/x token=abc")
+    assert "abc" not in problem_report.scrub("token=abc")
+    assert problem_report.fingerprint("E 5", "File a, line 1") == problem_report.fingerprint("E 7", "File a, line 9")
+
+
+def test_xair() -> None:
+    """X AIR: OSC-Pakete und Steuerung gegen ein Schein-Pult (UDP auf dem eigenen Rechner)."""
+    import socket
+    import threading
+    import time
+
+    from services import xair
+
+    assert xair.osc_decode(xair.osc_encode("/ch/01/mix/fader", 0.75)) == ("/ch/01/mix/fader", [0.75])
+    assert xair.osc_decode(xair.osc_encode("/ch/03/mix/on", 0)) == ("/ch/03/mix/on", [0])
+    assert xair.osc_decode(xair.osc_encode("/ch/02/config/name", "Pastor")) == ("/ch/02/config/name", ["Pastor"])
+    assert abs(xair.fader_db(0.75) - 0.0) < 1e-6 and xair.fader_db(0) == float("-inf")
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    server.settimeout(0.3)
+    received, stop = [], threading.Event()
+    values = {"/ch/02/mix/fader": 0.6, "/ch/02/mix/on": 1, "/ch/02/config/name": "Pastor"}
+
+    def fake_mixer():
+        while not stop.is_set():
+            try:
+                data, addr = server.recvfrom(4096)
+            except socket.timeout:
+                continue
+            decoded = xair.osc_decode(data)
+            received.append(decoded)
+            if decoded and not decoded[1] and decoded[0] in values:
+                server.sendto(xair.osc_encode(decoded[0], values[decoded[0]]), addr)
+
+    thread = threading.Thread(target=fake_mixer, daemon=True)
+    thread.start()
+    mixer = xair.XAirMixer("127.0.0.1", server.getsockname()[1])
+    mixer.start()
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and not (mixer.connected and mixer.state()["channels"][1]["name"]):
+            time.sleep(0.05)
+        channel = mixer.state()["channels"][1]
+        assert mixer.connected and channel["name"] == "Pastor" and abs(channel["level"] - 0.6) < 1e-3 and channel["mute"] is False
+        mixer.set_level(2, 0.4)
+        mixer.set_mute(2, True)
+        time.sleep(0.4)
+        assert any(r and r[1] and r[0] == "/ch/02/mix/fader" and abs(r[1][0] - 0.4) < 1e-3 for r in received), "Fader-Befehl fehlt"
+        assert ("/ch/02/mix/on", [0]) in received, "Mute-Befehl fehlt"
+        received.clear()
+        mixer.mute_all()
+        time.sleep(0.4)
+        assert all((f"/ch/{n:02d}/mix/on", [0]) in received for n in range(1, 9)), "Alle-stumm fehlt"
+        try:
+            mixer.set_level(9, 0.5)
+            raise AssertionError("Kanal 9 darf es nicht geben")
+        except ValueError:
+            pass
+    finally:
+        mixer.stop()
+        stop.set()
+        server.close()
+
+
+def test_new_features(tmp: Path) -> None:
+    """Lied mit fehlerhaftem Text behält seine Medien, Aufnahmen-Upload mit Fortsetzen, vorgemerkte Bilder abholen."""
+    import base64
+
+    from database import DatabaseManager
+    from services import recording_upload as up
+    from services import remote_relay as relay
+
+    # 1) Lied p12: ungültiges UTF-8 im Text darf nichts löschen und nicht abstürzen
+    folder = tmp / "p12"
+    folder.mkdir()
+    make_test_db(folder, songs=[("p012", None, "Test", "Text")])
+    con = sqlite3.connect(folder / "LiedManager.db")
+    con.execute("UPDATE Data SET audio1 = ?, bild1 = ?, alias = ? WHERE nummer = 'p012'",
+                (b"AUDIO" * 10, b"BILD" * 10, b"\xff\xfe kaputt"))
+    con.commit()
+    con.close()
+    db = DatabaseManager(str(folder / "LiedManager.db"))
+    row = db.get_song_full_data(1)
+    assert row is not None and row[4] == "Text", "Lied mit fehlerhaftem Text muss lesbar sein"
+    db.close()
+    con = sqlite3.connect(folder / "LiedManager.db")
+    assert con.execute("SELECT audio1, bild1 FROM Data").fetchone() == (b"AUDIO" * 10, b"BILD" * 10), \
+        "Beim Lesen dürfen Audio und Bilder nie gelöscht werden"
+    con.close()
+
+    # 2) Aufnahme-Upload: setzt dort fort, wo die Website aufgehört hat
+    sent = []
+
+    class FakeUploadApi:
+        def __init__(self, *args):
+            pass
+
+        def call(self, action, **params):
+            sent.append((action, params.get("offset"), params.get("last")))
+            return {"size": 3_000_000} if action == "rec_size" else {"ok": True, "name": params["name"]}
+
+    original = up.RemoteApi
+    up.RemoteApi = FakeUploadApi
+    try:
+        wav = tmp / "2026.10.25 - Test.wav"
+        wav.write_bytes(b"0" * 5_000_000)
+        assert up.upload_file("https://example.org/remote.php", "t" * 20, str(wav)) == wav.name
+    finally:
+        up.RemoteApi = original
+    assert sent[0][0] == "rec_size" and sent[1][1] == 3_000_000 and sent[-1][2] is True, sent
+
+    # 3) Von zu Hause hochgeladene Bilder (Zwischenspeicher auf der Website) werden abgeholt und bestätigt
+    items = [{"id": 1, "name": "a.png", "body": base64.b64encode(b"x").decode()},
+             {"id": 2, "name": "b.txt", "body": base64.b64encode(b"y").decode()}]
+    calls, taken = [], []
+
+    class FakeInboxApi:
+        def __init__(self, *args):
+            pass
+
+        def call(self, action, **params):
+            calls.append(action)
+            return {"item": items.pop(0) if items else None} if action == "inbox_get" else {"ok": True}
+
+    class FakeBackend:
+        def upload(self, name, data):
+            taken.append(name)
+
+    original = relay.RemoteApi
+    relay.RemoteApi = FakeInboxApi
+    try:
+        client = relay.RelayClient("https://example.org/remote.php", "t" * 20, FakeBackend())
+        client._inbox_busy = True
+        client._drain_inbox()
+    finally:
+        relay.RemoteApi = original
+    assert taken == ["a.png"] and calls.count("inbox_done") == 2 and not client._inbox_busy, (taken, calls)
+
+
 def main() -> int:
     import faulthandler
 
@@ -697,6 +910,7 @@ def main() -> int:
     import time
 
     from PyQt6.QtCore import Qt
+
     from ui.side_panel import TAB_CAMERA, TAB_IMAGES
     camera_panel = window.camera_panel
     assert window.side_panel.current_tab() == TAB_CAMERA, "Seitenleiste muss mit dem Reiter Kamera starten"
@@ -706,9 +920,19 @@ def main() -> int:
     assert not any(slot.hasFocus() for slot in camera_panel.slots), "Kamera-Rahmen ist ohne Klick angewählt"
     assert not hasattr(camera_panel, "status"), "die Statuszeile „Live“ unter den Kameras ist entfernt"
     for slot in camera_panel.slots:
-        assert abs(slot.height() * 16 - slot.width() * 9) <= 16, \
-            f"Kamerabild nicht im Format 16:9: {slot.width()}x{slot.height()}"
+        assert slot.height() == window.side_panel._slot_h, \
+            f"Kamerafeld hat nicht die feste Höhe: {slot.width()}x{slot.height()}"
         assert not hasattr(slot, "live_dot"), "der rote Kamera-Punkt ist entfernt"
+    # Kameras enden an der Pausentimer-Kopfzeile; „Keine Bilder“ steht mittig in deren Höhe -> Abstände oben/unten gleich
+    from PyQt6.QtCore import QPoint as _P
+    _win = window
+    _cam_bottom = camera_panel.mapTo(_win, _P(0, camera_panel.height())).y()
+    _head = window.pausentimer_panel.title
+    _head_top = _head.mapTo(_win, _P(0, 0)).y()
+    assert _cam_bottom == _head_top, f"Kameras enden nicht an der Pausentimer-Kopfzeile ({_cam_bottom} / {_head_top})"
+    _box = window.side_panel.images_count_box
+    assert _box.mapTo(_win, _P(0, 0)).y() == _head_top and _box.height() == _head.height(), \
+        "Anzahl-Zeile liegt nicht genau auf Höhe der Pausentimer-Kopfzeile"
     slot = camera_panel.slots[0]
     slot.set_state("live")                      # Zustand „Bild läuft“ nachstellen (offscreen gibt es keine Kamera)
     settle()
@@ -733,8 +957,16 @@ def main() -> int:
     # ---- Bilder-Liste: sanftes Scrollen, kein Springen beim Klicken ---------------------------
     from PyQt6.QtGui import QPixmap
     from PyQt6.QtWidgets import QListWidgetItem
+
     from ui.images_panel import _ThumbList
+    from ui.widgets import SmoothListWidget
+
+    def SmoothListWidget_wheel():
+        return SmoothListWidget.wheelEvent
+    assert _ThumbList.wheelEvent is not SmoothListWidget_wheel(), "Bilderliste scrollt nicht selbst: das Rad gehört dem äußeren Feld"
     thumbs = _ThumbList()
+    thumbs.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)     # Testaufbau: Rad-Logik der Basisklasse prüfen
+    thumbs.wheelEvent = lambda event, _f=SmoothListWidget_wheel(): _f(thumbs, event)
     for _ in range(20):
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, QPixmap(10, 10))
@@ -776,7 +1008,6 @@ def main() -> int:
     thumbs.close()
 
     # ---- Treffer der Textsuche: gleiches sanftes Scrollen, Doppelklick wählt das Lied vor ------
-    from ui.widgets import SmoothListWidget
     results = window.results_list
     assert isinstance(results, SmoothListWidget), "Trefferliste muss sanft scrollen wie die Bilder"
     assert results.WHEEL_STEP <= 60 and hasattr(results, "_glide"), "Trefferliste braucht das sanfte Nachgleiten"
@@ -794,10 +1025,17 @@ def main() -> int:
     window.pausentimer_panel.toggle()           # wieder aufklappen
     settle()
     assert window.side_panel.height() > window.COLLAPSED_HEIGHT, "Seitenleiste wächst nicht mit den Ansagen"
+    _field = window.images_panel.empty_label if window.images_panel.count() == 0 else window.images_panel.list
+    _text = window.pausentimer_panel.text_edit
+    assert _field.mapTo(window, _P(0, 0)).y() == _text.mapTo(window, _P(0, 0)).y(), \
+        "Bilder-Feld beginnt nicht auf Höhe des Ansagen-Textfelds"
+    if window.images_panel.count() == 0:
+        assert _field.height() == _text.height(), "leeres Bilder-Feld ist nicht so hoch wie das Ansagen-Textfeld"
     window.side_panel.grab().save(str(SHOTS / "06_kameras.png"))
 
     # ---- Kamera-/Mikrofon-Anfrage beim Start ---------------------------------------------------
     from PyQt6.QtCore import Qt as _Qt
+
     from services import permissions as perms
     from services.settings import app_settings as _settings
     granted, denied, undetermined = (_Qt.PermissionStatus.Granted, _Qt.PermissionStatus.Denied,
@@ -845,14 +1083,13 @@ def main() -> int:
         assert shown == [], f"auf diesem System darf kein Hinweis erscheinen: {shown}"
 
     # ---- Auto-Updater --------------------------------------------------------------------------
+    import datetime as _dt
     import time
 
     from services import updater as up
+    from services.recorder import recording_filename
     from services.settings import app_settings as _s
     from ui.updater_ui import KEY_CHECK_ON_START, KEY_SKIPPED, UpdateController
-
-    from services.recorder import recording_filename
-    import datetime as _dt
     assert recording_filename("Max Muster", _dt.datetime(2026, 10, 18)) == "2026.10.18 - Max Muster.wav"
     assert recording_filename("", _dt.datetime(2026, 10, 18)) == "2026.10.18.wav"
     assert recording_filename('a/b:c?', _dt.datetime(2026, 10, 18)) == "2026.10.18 - abc.wav"
@@ -898,36 +1135,105 @@ def main() -> int:
     assert _songlog.record("8", None, when=_dt0.date(2026, 10, 25))
     assert log_file.read_text(encoding="utf-8").splitlines()[3:] == ["", "Sonntag, 25.10.2026", "7 – Neuer Tag", "8"]
     assert _songlog.format_day(_dt0.date(2026, 10, 21)) == "Mittwoch, 21.10.2026"
+    # sonntags 9–10 Uhr / mittwochs 18:30–19:30 Uhr: in der Historie, aber mit „[nicht melden]“
+    assert _songlog.record("9", "Kinderstunde", at=_dt0.datetime(2026, 10, 25, 9, 15))
+    assert _songlog.record("10", "Bibelstunde", at=_dt0.datetime(2026, 10, 28, 19, 0))
+    assert _songlog.record("11", "Nachmittag", at=_dt0.datetime(2026, 10, 28, 20, 0))
+    _rows = log_file.read_text(encoding="utf-8").splitlines()
+    assert "9 – Kinderstunde  [nicht melden]" in _rows and "10 – Bibelstunde  [nicht melden]" in _rows \
+        and "11 – Nachmittag" in _rows, "Zeitfenster ohne CCLI-Meldung werden nicht markiert"
     _ss().setValue(_songlog.KEY_TEST_MODE, True)                # ab hier: Testmodus, damit spätere Tests nichts schreiben
     _ss().setValue(_songlog.KEY_ENABLED, True)
     window.close_beamer_windows()
     from ui.settings_dialog import SettingsDialog as _SD
     dlg = _SD(window)
-    assert dlg.test_mode_checkbox.isChecked() and dlg.songlog_checkbox.isChecked()
-    assert dlg.test_mode_checkbox.toolTip() and dlg.open_songlog_btn.toolTip() and dlg.songlog_checkbox.toolTip()
+    assert dlg.songlog_checkbox.isChecked() and dlg.songlog_checkbox.toolTip()
+    assert not hasattr(dlg, "test_mode_checkbox") and not hasattr(dlg, "open_songlog_btn")
     dlg.close()
     assert _songlog.format_entry("p012", "None") == "p012" and _songlog.format_entry(5, " Ein  Titel ") == "5 – Ein Titel"
 
-    # Seitenleiste ein- und ausklappen (Klick auf den offenen Reiter)
-    from services.settings import app_settings as _app_settings
-    from ui.side_panel import SidePanel
-    side = window.side_panel
-    full_width = window.maximumWidth()
-    side.set_collapsed(False)
-    side.group.button(0).click()
-    assert side.collapsed and window.maximumWidth() == SidePanel.COLLAPSED_WIDTH + window.WIDTH, "Einklappen muss das Fenster verschmälern"
-    assert _app_settings().value("side_collapsed", False, type=bool) is True
-    side.group.button(0).click()
-    assert not side.collapsed and window.maximumWidth() == full_width, "Ausklappen muss die Breite wiederherstellen"
-    side.group.button(0).click()
-    side.show_tab(1)
-    assert not side.collapsed and side.current_tab() == 1, "Bilder ablegen / Reiter wählen klappt die Leiste aus"
-    side.show_tab(0)
+    # CCLI-Meldetabelle: Nummern kommen aus der CCLI-Spalte der Datenbank
+    from services import ccli as _ccli
+    _ccli.report_path = lambda: tmp / "CCLI-Meldung.csv"
+    ccli_db = tmp / "ccli_test.db"
+    make_test_db(tmp, "ccli_test.db")
+    con = sqlite3.connect(ccli_db)
+    con.execute("ALTER TABLE Data ADD COLUMN CCLI_Nr TEXT")
+    con.execute("UPDATE Data SET CCLI_Nr = 'CCLI 7 123 456' WHERE nummer = 'p001'")
+    con.commit()
+    con.close()
+    assert _ccli.numbers_from_db(ccli_db) == {"p001": "7123456"}, "CCLI-Nummer muss auf Ziffern bereinigt werden"
+    ccli_log = tmp / "ccli_log.txt"
+    log_text = "Sonntag, 25.10.2026\r\np001 – Eins\r\n7 – Sieben\r\n8\r\n"
+    ccli_log.write_text(log_text, encoding="utf-8")
+
+    class _Store(dict):
+        def value(self, key, default=None):
+            return self.get(key, default)
+
+        def setValue(self, key, value):
+            self[key] = value
+
+    _store = _Store()
+    out, count, missing = _ccli.export_report(ccli_db, log_path=ccli_log, store=_store)
+    assert out.read_text(encoding="utf-8-sig").split() == ["7123456"] and count == 1 and missing == 2, \
+        "in der Meldeliste stehen nur CCLI-Nummern"
+    assert ccli_log.read_bytes() == log_text.encode("utf-8"), "die Liste der gespielten Lieder (Historie) bleibt unverändert"
+    out, count, missing = _ccli.export_report(ccli_db, log_path=ccli_log, store=_store)
+    assert count == 1 and missing == 0, "schon übernommene Lieder dürfen nicht noch einmal in die Meldeliste"
+    with open(ccli_log, "a", encoding="utf-8", newline="") as _f:
+        _f.write("\r\nSonntag, 01.11.2026\r\np001 – Eins\r\n7 – Sieben\r\np001 – Eins\r\n")
+    out, count, missing = _ccli.export_report(ccli_db, log_path=ccli_log, store=_store)
+    assert out.read_text(encoding="utf-8-sig").split() == ["7123456", "7123456"] and count == 2, \
+        "neue Nummern kommen hinter offene, dasselbe Lied am selben Tag nur einmal"
+    _ccli.write_report([], out)
+    assert not out.exists(), "ist alles gemeldet, wird die Meldeliste gelöscht"
+    for _name in _ccli.LEGACY_FILES:
+        (tmp / _name).write_text("x", encoding="utf-8")
+    _ccli.remove_legacy_files(tmp)
+    assert not any((tmp / _name).exists() for _name in _ccli.LEGACY_FILES), "alte Ergebnis-/Archivdateien müssen weg"
+    assert _ccli.parse_log("Sonntag, 25.10.2026\n7 – A – B\n8\n") == [("Sonntag", "25.10.2026", "7", "A – B"),
+                                                                       ("Sonntag", "25.10.2026", "8", "")]
+    from PyQt6.QtGui import QFontMetrics as _FM
+    from PyQt6.QtWidgets import QMessageBox as _MB
+
+    from ui import theme as _theme
+    _box = _MB(window)
+    _long = _box.addButton("Herunterladen und installieren", _MB.ButtonRole.AcceptRole)
+    _box.show()
+    _theme._DialogButtonFit.fit(_box)
+    assert _long.width() >= _FM(_long.font()).horizontalAdvance(_long.text()) + 2 * _theme.DIALOG_BUTTON_PAD, \
+        "Knopftext im Meldungsfenster ist abgeschnitten"
+    _box.close()
+    # Autostart (Linux-Testlauf: Eintrag in einem Testordner statt im echten ~/.config)
+    from services import autostart as _autostart
+    if sys.platform.startswith("linux"):
+        _old_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = str(tmp / "xdg")
+        try:
+            assert not _autostart.is_enabled()
+            assert _autostart.set_enabled(True) == "" and _autostart.is_enabled(), "Autostart lässt sich nicht einschalten"
+            assert "main.py" in _autostart._linux_desktop().read_text(encoding="utf-8")
+            assert _autostart.set_enabled(False) == "" and not _autostart.is_enabled(), "Autostart lässt sich nicht ausschalten"
+        finally:
+            if _old_xdg is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = _old_xdg
+    dlg = _SD(window)
+    assert dlg.autostart_checkbox.isChecked() == _autostart.is_enabled(), "Autostart-Häkchen zeigt den falschen Zustand"
+    assert dlg.no_report_input.text() == _songlog.format_windows(_songlog.no_report_windows()), "Zeitfenster fehlen im Dialog"
+    assert _songlog.parse_windows("So 9:00-10:00; Mittwoch 18.30–19.30 Uhr") == list(_songlog.NO_REPORT_WINDOWS)
+    assert dlg.ccli_report_btn.toolTip() and not hasattr(dlg, "ccli_export_btn") and not hasattr(dlg, "ccli_numbers_btn")
+    dlg.close()
 
     test_updater_logic(tmp)
     test_server_sync(tmp)
     test_remote_relay(tmp)
     test_remote_site()
+    test_new_features(tmp)
+    test_xair()
+    test_history_and_problem_report(tmp)
     assert not UpdateController(window, repo="").available, "ohne Repository muss der Updater aus sein"
     dialog = SettingsDialog(window, updates_available=False)
     assert not dialog.update_check_btn.isEnabled() and "nicht eingerichtet" in dialog.update_status_label.text()
@@ -963,6 +1269,7 @@ def main() -> int:
 
     # ---- Pausentimer: Folienwechsel hängen weder vom Fenster-Fokus noch von einem hängenden Skript ab ---
     import datetime
+
     from services import power
     from services.powerpoint import goto_command
     ctrl = window.pausentimer
@@ -1039,15 +1346,15 @@ def main() -> int:
         assert window.sync.url() == "", "Abgleich muss ohne Server-Adresse aus sein"
         dialog = SettingsDialog(window)
         assert dialog.sync_url_input.text() == "" and "Aus" in dialog.sync_status_label.text()
-        assert not dialog.sync_checkbox.isChecked() and not dialog.sync_now_btn.isEnabled()
-        for widget in (dialog.sync_checkbox, dialog.sync_url_input, dialog.sync_token_input, dialog.sync_now_btn,
+        assert not hasattr(dialog, "sync_checkbox") and not dialog.sync_now_btn.isEnabled()
+        for widget in (dialog.sync_url_input, dialog.sync_token_input, dialog.sync_now_btn,
                        dialog.sync_force_btn):
             assert widget.toolTip(), "neue Elemente brauchen einen Hover-Hinweis"
         asked = []
         dialog.sync_requested.connect(lambda url, token: asked.append((url, token)))
         dialog.sync_url_input.setText(sync_server.url)
         dialog.sync_token_input.setText(FakeSyncServer.TOKEN)
-        dialog.sync_checkbox.setChecked(True)          # wirkt sofort (Schalter)
+        dialog._apply_sync_fields()                    # wirkt sofort, sobald eine Adresse da ist
         assert window.sync.enabled() and window.sync._timer.isActive()
         dialog.sync_now_btn.click()
         assert asked == [(sync_server.url, FakeSyncServer.TOKEN)], "„Jetzt abgleichen“ muss Adresse und Token aus den Feldern melden"
@@ -1066,12 +1373,10 @@ def main() -> int:
         assert "Eingerichtet" in window.sync.status, f"erster Abgleich: {window.sync.status}"
         assert window.db.search_songs("1"), "das Programm muss während und nach dem Abgleich benutzbar sein"
         dialog = SettingsDialog(window)
-        assert dialog.sync_checkbox.isChecked()
-        dialog.sync_checkbox.setChecked(False)         # Verbindung kappen, Adresse und Token bleiben
-        assert not window.sync._timer.isActive() and window.sync.status == "Aus" and not window.sync.enabled()
+        dialog.sync_auto_checkbox.setChecked(False)    # nur noch auf Knopfdruck; Adresse und Token bleiben
+        assert not window.sync._timer.isActive() and window.sync.enabled()
         assert window.sync.url() == sync_server.url and window.sync.token() == FakeSyncServer.TOKEN
-        assert dialog.sync_url_input.text() == sync_server.url and not dialog.sync_now_btn.isEnabled()
-        assert not window.sync.run_now(), "ausgeschaltet darf nichts abgeglichen werden"
+        assert dialog.sync_url_input.text() == sync_server.url and dialog.sync_now_btn.isEnabled()
         dialog.close()
         app_settings().setValue(KEY_SYNC_URL, "")
         app_settings().setValue(KEY_SYNC_TOKEN, "")
@@ -1082,15 +1387,22 @@ def main() -> int:
 
     # ---- Steuerung über die Website: Backend im laufenden Programm ----------------------------
     import threading
+
     from PyQt6.QtGui import QColor, QImage
+
     from services.remote_common import RemoteError as _RemoteError
     from ui.settings_dialog import SettingsDialog as _SettingsDialog
-    from ui.web_remote_ui import KEY_SITE_ENABLED, KEY_SITE_TOKEN, KEY_SITE_URL, LEGACY_KEYS
+    from ui.web_remote_ui import (
+        KEY_SITE_ENABLED,
+        KEY_SITE_TOKEN,
+        KEY_SITE_URL,
+        LEGACY_KEYS,
+    )
 
     dialog = _SettingsDialog(window)
     assert not hasattr(dialog, "remote_checkbox"), "der lokale Webserver ist entfernt"
     tab_names = [dialog.tab_group.button(i).text() for i in range(len(dialog.tab_group.buttons()))]
-    assert tab_names == ["Anzeige", "Audio", "Kamera", "ATEM", "Datenbank", "Remote", "Update"], tab_names
+    assert tab_names == ["Anzeige", "Audio", "Kamera", "Mischpult", "Datenbank", "Remote", "Update"], tab_names
     assert dialog.pages.widget(4).isAncestorOf(dialog.db_path_input) and dialog.pages.widget(4).isAncestorOf(dialog.sync_url_input)
     assert dialog.pages.widget(6).isAncestorOf(dialog.update_checkbox)
     assert not dialog.pages.widget(4).isAncestorOf(dialog.site_checkbox), "Remote gehört in den Reiter „Remote“"
@@ -1212,15 +1524,15 @@ def main() -> int:
     panel = window.images_panel
     window.side_panel.show_tab(TAB_IMAGES)
     settle()
-    assert panel.isVisible() and not camera_panel.isVisible(), "Reiter Bilder muss das Kamera-Panel ersetzen"
-    assert panel.empty_label.isVisible() and not panel.list.isVisible(), "leeres Bilder-Panel braucht den Hinweis"
+    assert camera_panel.isVisible() and window.side_panel.current_tab() == TAB_CAMERA, \
+        "ohne Reiterleiste bleibt immer die Kamera-Seite sichtbar"
+    assert not any(b.isVisible() for b in window.side_panel.group.buttons()), "die Reiterknöpfe sind entfernt"
     window.side_panel.show_tab(TAB_CAMERA)
 
     window.add_images([str(folder)])     # wie Drag & Drop: legt ab und wechselt selbst auf „Bilder“
     settle()
     assert panel.count() == 3, f"erwartet 3 Bilder, bekommen: {panel.count()}"
-    assert window.side_panel.current_tab() == TAB_IMAGES, "Drag & Drop muss auf den Reiter Bilder wechseln"
-    assert panel.list.isVisible() and not panel.empty_label.isVisible(), "Vorschau-Liste ist nicht sichtbar"
+    assert window.side_panel.current_tab() == TAB_CAMERA, "ohne Reiterleiste bleibt die Kamera-Seite stehen"
     assert not hasattr(panel, "hint"), "mit Bildern gehört der ganze Platz der Vorschau (keine Erklärung darunter)"
     assert window.side_panel.group.button(TAB_IMAGES).badge == 3, "Reiter Bilder zeigt die Anzahl nicht"
     assert panel.paths()[2].endswith("bild10.png"), "natürliche Sortierung (bild2 vor bild10) fehlt"
@@ -1290,7 +1602,7 @@ def main() -> int:
     assert panel.count() == 2
     panel.clear()
     settle()
-    assert panel.empty_label.isVisible() and not panel.list.isVisible(), "leere Ablage muss den Hinweis zeigen"
+    assert panel.count() == 0, "leere Ablage muss leer sein"
     assert window.side_panel.group.button(TAB_IMAGES).badge == 0, "Reiter muss nach dem Leeren ohne Zahl sein"
 
     print("Smoke-Test bestanden. Screenshots:", SHOTS)

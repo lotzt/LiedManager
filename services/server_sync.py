@@ -28,12 +28,14 @@ import logging
 import os
 import sqlite3
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -43,7 +45,9 @@ KEY_COLUMN = "nummer"
 CONTENT_COLUMNS = ("alias", "titel", "lyrics", "audio1", "audio2", "bild1", "bild2", "bild3", "bild4")
 LOCK_TIMEOUT = 20          # Sekunden, die auf eine gesperrte Datenbank gewartet wird
 REQUEST_TIMEOUT = 90       # Sekunden pro Anfrage (große Audios brauchen auf langsamen Leitungen etwas)
-MAX_SONG_BYTES = 48_000_000    # größere Lieder werden gar nicht erst hochgeladen
+PART_BYTES = 6_000_000         # größere Lieder gehen in Teilen dieser Größe hoch (Serverlimits wie post_max_size)
+MAX_SONG_BYTES = 400_000_000   # noch größere Lieder werden gar nicht erst hochgeladen
+PUSH_WORKERS = 4           # gleichzeitige Uploads (spart die Wartezeit je Anfrage)
 MAX_FAILURES = 3           # so viele abgelehnte Lieder pro Lauf, dann Abbruch (Server meldet Fehler)
 RETRY_FAILED_AFTER = 3600  # abgelehntes (unverändertes) Lied frühestens nach dieser Zeit erneut versuchen
 
@@ -62,6 +66,7 @@ class SyncResult:
     received: int = 0        # Lieder, die vom Server übernommen wurden
     skipped: int = 0         # Änderungen, die schon durch eine jüngere überholt waren
     failed: int = 0          # Lieder, die der Server nicht annehmen konnte (z. B. zu groß)
+    failed_songs: list = field(default_factory=list)   # Liednummer (und Größe), damit man sie im Programm findet
     baseline: bool = False   # erster Lauf: Ausgangspunkt gespeichert
     forced: bool = False     # „Alles neu hochladen“: dieser Stand gilt jetzt für alle Geräte
     error: str = ""
@@ -86,7 +91,8 @@ class SyncResult:
         if self.received:
             parts.append(f"{self.received} übernommen")
         if self.failed:
-            parts.append(f"{self.failed} Lied(er) vom Server abgelehnt (zu groß?)")
+            names = ", ".join(self.failed_songs[:6]) + (" …" if len(self.failed_songs) > 6 else "")
+            parts.append(f"{self.failed} Lied(er) vom Server abgelehnt (zu groß?)" + (f": {names}" if names else ""))
         return ", ".join(parts) if parts else "Alles aktuell"
 
 
@@ -101,6 +107,11 @@ def _encode(value) -> bytes:
         return b"b" + len(data).to_bytes(8, "big") + data
     data = str(value).encode("utf-8")
     return b"s" + len(data).to_bytes(8, "big") + data
+
+
+def clean_ccli(value) -> str:
+    """CCLI-Nummern bestehen nur aus Ziffern (Leerzeichen und Zusätze entfallen)."""
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
 
 
 def row_hash(values) -> str:
@@ -233,9 +244,13 @@ class ServerApi:
 # ----------------------------------------------------------------------
 class ServerSync:
     def __init__(self, db_path, url, token, state_path, now_ms=None, api: Optional[ServerApi] = None,
-                 force_upload: bool = False):
-        """``force_upload``: Alles neu hochladen – die lokale Datenbank wird zum verbindlichen Stand für alle Geräte."""
+                 force_upload: bool = False, on_progress=None, retry_failed: bool = False):
+        """``force_upload``: Alles neu hochladen – die lokale Datenbank wird zum verbindlichen Stand für alle Geräte.
+        ``on_progress(erledigt, gesamt)`` wird beim Senden nach jedem Lied aufgerufen (aus dem Abgleich-Thread)."""
         self.force_upload = force_upload
+        self.cancelled = threading.Event()        # beim Beenden des Programms gesetzt: Abgleich bricht zwischen zwei Liedern ab
+        self.retry_failed = retry_failed          # abgelehnte Lieder sofort erneut versuchen (statt erst nach einer Wartezeit)
+        self._on_progress = on_progress
         self.db_path = str(db_path)
         self.url = normalize_url(url)
         self.token = (token or "").strip()
@@ -345,15 +360,27 @@ class ServerSync:
         return [c for c in CONTENT_COLUMNS if c in columns]
 
     @staticmethod
+    def _ccli_col(conn) -> str:
+        """Name der Spalte für die CCLI-Nummer (jede Spalte, deren Name „ccli“ enthält), sonst leer."""
+        for row in conn.execute("PRAGMA table_info(Data)"):
+            if "ccli" in str(row[1]).lower():
+                return str(row[1])
+        return ""
+
+    @staticmethod
     def _fingerprints(conn, columns) -> dict:
-        """Schlüssel -> (Fingerabdruck, rowid). Liest Zeile für Zeile, auch bei sehr großen Audios."""
+        """Schlüssel -> (Fingerabdruck, rowid). Liest Zeile für Zeile, auch bei sehr großen Audios.
+        Die CCLI-Nummer fließt nur ein, wenn eine eingetragen ist – Lieder ohne Nummer behalten ihren bisherigen Wert."""
         found = {}
         seen = {}
-        select = ", ".join(("rowid", KEY_COLUMN) + tuple(columns))
+        ccli_col = ServerSync._ccli_col(conn)
+        select = ", ".join(("rowid", KEY_COLUMN) + tuple(columns) + ((f'"{ccli_col}"',) if ccli_col else ()))
         for row in conn.execute(f"SELECT {select} FROM Data ORDER BY rowid"):
             key = make_key(row[1], seen)
             if key is not None:
-                found[key] = (row_hash(row[2:]), row[0])
+                values = tuple(row[2:2 + len(columns)])
+                ccli = clean_ccli(row[-1]) if ccli_col else ""
+                found[key] = (row_hash(values + ((ccli,) if ccli else ())), row[0])
         return found
 
     @staticmethod
@@ -369,10 +396,13 @@ class ServerSync:
     @staticmethod
     def _song_payload(conn, columns, rowid) -> str:
         """Ein Lied als JSON-Text (so wie es auf dem Server liegt)."""
-        select = ", ".join((KEY_COLUMN,) + tuple(columns))
+        ccli_col = ServerSync._ccli_col(conn)
+        select = ", ".join((KEY_COLUMN,) + tuple(columns) + ((f'"{ccli_col}"',) if ccli_col else ()))
         values = conn.execute(f"SELECT {select} FROM Data WHERE rowid = ?", (rowid,)).fetchone()
-        by_name = dict(zip(columns, values[1:]))
+        by_name = dict(zip(columns, values[1:1 + len(columns)]))
         payload = {"nummer": _pack(values[0]), "cols": {c: _pack(by_name.get(c)) for c in CONTENT_COLUMNS}}
+        if ccli_col:                                        # leer mitsenden: so wird auch ein Löschen weitergegeben
+            payload["cols"]["ccli"] = clean_ccli(values[-1])
         return json.dumps(payload, separators=(",", ":"))
 
     # ------------------------------------------------------------------
@@ -383,10 +413,16 @@ class ServerSync:
         baseline_done = self._meta(state, "baseline") == "1"
         signature = self._signature()
         force = self.force_upload
+        if self.retry_failed and not force and int(self._meta(state, "failed_count", 0)):
+            for name in [row[0] for row in state.execute("SELECT key FROM meta WHERE key LIKE 'fail:%'")]:
+                state.execute("DELETE FROM meta WHERE key = ?", (name,))
+            self._set_meta(state, "signature", "")    # kein vorzeitiges „nichts geändert“
+            state.commit()
         retry_at = float(self._meta(state, "retry_at", 0))       # > 0: abgelehnte Lieder warten auf einen neuen Versuch
         if (not force and baseline_done and self._meta(state, "signature") == signature
                 and (not retry_at or time.time() < retry_at)):
             result.failed = int(self._meta(state, "failed_count", 0))
+            result.failed_songs = [n for n in str(self._meta(state, "failed_names", "")).split("|") if n]
             return                                    # Datenbank unverändert seit dem letzten Abgleich
 
         conn = self._connect_local()
@@ -425,38 +461,90 @@ class ServerSync:
                 ts = self._next_ts(state)
                 state.commit()
                 failures = 0
-                for key in changed:
-                    digest, rowid = current[key]
-                    if self._recently_failed(state, key, digest):
-                        result.failed += 1
-                        continue
-                    try:
-                        data = self._song_payload(conn, columns, rowid)
-                        if len(data) > MAX_SONG_BYTES:
-                            raise SyncError("Lied zu groß für den Server.", 413)
-                        answer = api.call("push", key=key, ts=ts, dev=device, hash=digest, deleted=0, data=data)
-                    except SyncError as exc:
-                        if exc.status not in (400, 413, 500):
-                            raise                     # keine Verbindung / Token falsch: ganz abbrechen
-                        log.warning("Lied %s vom Server abgelehnt: %s", key, exc)
-                        self._set_meta(state, f"fail:{key}", f"{digest}:{int(time.time())}")
-                        state.commit()
-                        result.failed += 1
-                        failures += 1
-                        if failures >= MAX_FAILURES:
-                            raise SyncError(f"Der Server lehnt Lieder ab ({exc}).") from exc
-                        continue
-                    self._finish_push(state, result, answer, key, digest, ts, device, 0)
+                total, done = len(changed) + len(removed), 0
+                self._report(0, total)
+                pool = ThreadPoolExecutor(max_workers=PUSH_WORKERS)
+                try:
+                    for start in range(0, len(changed), PUSH_WORKERS):
+                        batch, jobs = changed[start:start + PUSH_WORKERS], []
+                        for key in batch:             # Daten im Hauptthread lesen, Senden läuft parallel
+                            digest, rowid = current[key]
+                            if self._recently_failed(state, key, digest):
+                                jobs.append((key, digest, "", None, "skip"))
+                                continue
+                            try:
+                                data = self._song_payload(conn, columns, rowid)
+                            except sqlite3.Error as exc:
+                                jobs.append((key, digest, "", None, SyncError(str(exc), 500)))
+                                continue
+                            note = f" ({len(data) / 1_000_000:.0f} MB)"
+                            if len(data) > MAX_SONG_BYTES:
+                                jobs.append((key, digest, note, None, SyncError("Lied zu groß für den Server.", 413)))
+                                continue
+                            future = pool.submit(self._push_one, api, key, ts, device, digest, data)
+                            jobs.append((key, digest, note, future, None))
+                        for key, digest, note, future, problem in jobs:
+                            if self.cancelled.is_set():
+                                raise SyncError("Abgebrochen.")
+                            done += 1
+                            self._report(done - 1, total)
+                            answer = None
+                            if problem == "skip":
+                                result.failed += 1
+                                result.failed_songs.append(key)
+                                continue
+                            if problem is None:
+                                try:
+                                    answer = future.result()
+                                except SyncError as exc:
+                                    problem = exc
+                            if problem is not None:
+                                if problem.status not in (400, 413, 500):
+                                    raise problem     # keine Verbindung / Token falsch: ganz abbrechen
+                                log.warning("Lied %s vom Server abgelehnt: %s", key, problem)
+                                self._set_meta(state, f"fail:{key}", f"{digest}:{int(time.time())}")
+                                state.commit()
+                                result.failed += 1
+                                result.failed_songs.append(key + note)
+                                if problem.status != 413:     # „zu groß“ ist ein Einzelfall und bricht den Abgleich nicht ab
+                                    failures += 1
+                                if failures >= MAX_FAILURES:
+                                    raise SyncError(f"Der Server lehnt Lieder ab ({problem}).") from problem
+                                continue
+                            self._finish_push(state, result, answer, key, digest, ts, device, 0)
+                finally:
+                    pool.shutdown(wait=True, cancel_futures=True)
                 for key in removed:
+                    done += 1
+                    self._report(done - 1, total)
                     old_hash = known[key][0] if key in known else ""
                     answer = api.call("push", key=key, ts=ts, dev=device, hash=old_hash, deleted=1, data=None)
                     self._finish_push(state, result, answer, key, old_hash, ts, device, 1)
+                self._report(total, total)
             self._set_meta(state, "signature", signature)
             self._set_meta(state, "failed_count", result.failed)
+            self._set_meta(state, "failed_names", "|".join(result.failed_songs[:50]))
             self._set_meta(state, "retry_at", time.time() + RETRY_FAILED_AFTER if result.failed else 0)
             state.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _push_one(api, key, ts, device, digest, data):
+        if len(data) <= PART_BYTES:
+            return api.call("push", key=key, ts=ts, dev=device, hash=digest, deleted=0, data=data)
+        uid = uuid.uuid4().hex                      # großes Lied: erst die Teile, dann der Eintrag
+        parts = [data[i:i + PART_BYTES] for i in range(0, len(data), PART_BYTES)]
+        for index, part in enumerate(parts):
+            api.call("push_part", uid=uid, idx=index, data=part)
+        return api.call("push", key=key, ts=ts, dev=device, hash=digest, deleted=0, data=None, parts=len(parts), uid=uid)
+
+    def _report(self, done: int, total: int) -> None:
+        if self._on_progress is not None:
+            try:
+                self._on_progress(done, total)
+            except Exception:
+                log.debug("Fortschrittsanzeige fehlgeschlagen", exc_info=True)
 
     def _live_keys_on_server(self, state, api: ServerApi) -> set:
         """Alle Lieder, die auf dem Server nicht gelöscht sind. Merkt sich dabei den jüngsten Zeitstempel,
@@ -512,6 +600,8 @@ class ServerSync:
                 continue
             reset_checked = True
             for item in page.get("items", []):
+                if self.cancelled.is_set():
+                    raise SyncError("Abgebrochen.")
                 self._receive_item(state, result, api, item, device)
                 cursor = int(item["seq"])
                 self._set_meta(state, "cursor", cursor)
@@ -539,6 +629,8 @@ class ServerSync:
             row = answer.get("row")
             if not row:
                 return
+            if row.get("parts"):                      # großes Lied: Teile einzeln abholen und zusammensetzen
+                row["data"] = "".join(api.call("get_part", uid=row["uid"], idx=i)["data"] for i in range(int(row["parts"])))
             stamp = (int(row["ts"]), str(row["dev"]))
             self._seen_ts(state, stamp[0])
             if known is not None and (known[1], known[2]) >= stamp:
@@ -578,6 +670,15 @@ class ServerSync:
                     insert_columns = [KEY_COLUMN] + columns
                     conn.execute(f"INSERT INTO Data ({', '.join(insert_columns)}) "
                                  f"VALUES ({', '.join('?' * len(insert_columns))})", (nummer, *payload))
+                if "ccli" in cols:                          # Sender hat eine CCLI-Spalte (Wert evtl. leer)
+                    ccli = clean_ccli(cols.get("ccli"))
+                    ccli_col = self._ccli_col(conn)
+                    if ccli and not ccli_col:
+                        conn.execute("ALTER TABLE Data ADD COLUMN CCLI TEXT")      # Spalte bei Bedarf anlegen
+                        ccli_col = "CCLI"
+                    if ccli_col:
+                        target = mapping[key] if key in mapping else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                        conn.execute(f'UPDATE Data SET "{ccli_col}" = ? WHERE rowid = ?', (ccli or None, target))
             conn.commit()
         except BaseException:
             conn.rollback()

@@ -9,8 +9,9 @@ Stylesheet-Bausteine. Die Zustände sind überall nach demselben Muster aufgebau
     Fokus    -> Kontur ACCENT (Eingabefelder) / ACCENT_LIGHT (Tastatur-Fokus bei Buttons)
     gewählt  -> Kontur ACCENT + leichte Bronze-Tönung der Fläche
 """
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QEvent, QObject, QTimer
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPalette
+from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QPushButton
 
 from paths import ASSETS_DIR
 
@@ -312,7 +313,7 @@ def hint_style() -> str:
 def _global_stylesheet() -> str:
     outline = f"""
         color: {PILL_TEXT}; background: {PANEL_GRADIENT}; border: 1px solid {ACCENT_BORDER};
-        border-radius: 10px; padding: 0 18px; min-height: 34px; min-width: 84px;
+        border-radius: 10px; padding: 0 {DIALOG_BUTTON_PAD}px; min-height: 34px; min-width: 84px;
         font-size: {FS}px; font-weight: 500;
     """
     return f"""
@@ -322,10 +323,12 @@ def _global_stylesheet() -> str:
             border: 1px solid {ACCENT_BORDER}; padding: 5px 8px;
         }}
         QMessageBox QLabel {{ color: {TEXT_PRIMARY}; font-size: {FS}px; }}
-        QMessageBox QPushButton {{ {outline} }}
-        QMessageBox QPushButton:hover {{ border-color: {ACCENT}; color: {TEXT_PRIMARY}; }}
-        QMessageBox QPushButton:pressed {{ background: {SURFACE_PRESSED}; border-color: {ACCENT_LIGHT}; }}
+        QMessageBox QPushButton, QProgressDialog QPushButton {{ {outline} }}
+        QMessageBox QPushButton:hover, QProgressDialog QPushButton:hover {{ border-color: {ACCENT}; color: {TEXT_PRIMARY}; }}
+        QMessageBox QPushButton:pressed, QProgressDialog QPushButton:pressed {{
+            background: {SURFACE_PRESSED}; border-color: {ACCENT_LIGHT}; }}
         QMessageBox QPushButton:default {{ border-color: {ACCENT}; }}
+        QProgressDialog QLabel {{ color: {TEXT_PRIMARY}; font-size: {FS}px; }}
         QMenu {{ background: {SURFACE}; border: 1px solid {BORDER}; padding: 4px; color: {TEXT_PRIMARY}; }}
         QMenu::item {{ padding: 6px 20px; border-radius: 6px; }}
         QMenu::item:selected {{ background: {ACCENT_TINT}; color: {ACCENT_LIGHT}; }}
@@ -342,6 +345,41 @@ def _global_stylesheet() -> str:
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ height: 0; width: 0; }}
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
     """
+
+
+DIALOG_BUTTON_PAD = 18     # = padding der Knöpfe in Meldungsfenstern (siehe _global_stylesheet)
+
+
+class _DialogButtonFit(QObject):
+    """Meldungsfenster (QMessageBox, QProgressDialog) messen ihre Knöpfe, bevor das Stylesheet greift (größere,
+    halbfette Schrift + Innenabstand). Dann ist der Text abgeschnitten – vor allem bei langen Beschriftungen wie
+    „Herunterladen und installieren“. Beim Anzeigen wird jede Knopfbreite deshalb mit der echten Schrift nachgerechnet."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and isinstance(obj, (QMessageBox, QProgressDialog)):
+            self.fit(obj)
+            QTimer.singleShot(0, lambda o=obj: self.fit(o))     # nach dem Polieren (macOS) noch einmal
+        return False
+
+    @staticmethod
+    def fit(dialog) -> None:
+        try:
+            buttons = dialog.findChildren(QPushButton)
+        except RuntimeError:          # Fenster ist schon wieder weg
+            return
+        changed = False
+        for button in buttons:
+            button.ensurePolished()
+            text = button.text().replace("&&", "\0").replace("&", "").replace("\0", "&")
+            width = QFontMetrics(button.font()).horizontalAdvance(text) + 2 * DIALOG_BUTTON_PAD + 2 + 12   # Rahmen + Luft
+            if button.minimumWidth() < width:
+                button.setMinimumWidth(width)
+                changed = True
+        if changed:
+            dialog.adjustSize()
+
+
+_dialog_fit = None
 
 
 def apply_theme(app: QApplication) -> None:
@@ -373,3 +411,7 @@ def apply_theme(app: QApplication) -> None:
     load_bundled_fonts()  # vor dem Setzen der Schrift, damit mitgelieferte Dateien greifen
     app.setFont(body_font())
     app.setStyleSheet(_global_stylesheet())
+    global _dialog_fit
+    if _dialog_fit is None:
+        _dialog_fit = _DialogButtonFit(app)
+        app.installEventFilter(_dialog_fit)       # Knopftexte in Meldungsfenstern nie abgeschnitten

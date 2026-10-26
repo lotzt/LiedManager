@@ -41,14 +41,19 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 
 Ändert man die Datenbank mit einem Editor, erkennt LiedManager die Änderung und schickt sie zum Server; die anderen
 Geräte holen sie ab. Streiten zwei Geräte um dasselbe Lied, gewinnt die jüngere Änderung. Ein Lied wird über seine
-Nummer erkannt. Jedes Lied wird einzeln übertragen; sehr große Lieder (viel Audio) können an den PHP-Grenzen des
-Hosters scheitern (`post_max_size`, `memory_limit`) – das Programm meldet das im Status und macht mit dem Rest weiter.
+Nummer erkannt. Jedes Lied wird einzeln übertragen, bis zu 4 gleichzeitig. Große Lieder (über 6 MB, viel Audio/Bilder) gehen
+in Teilen zu je 6 MB hoch und werden auf dem Server in `lm_parts` abgelegt (bis 400 MB je Lied); dafür muss die neue
+`server/sync.php` auf dem Server liegen (Tabellen werden automatisch angelegt). Lehnt der Server ein Lied dennoch ab, meldet
+das Programm das im Status und macht mit dem Rest weiter. Ältere Programmversionen können Lieder in Teilen nicht lesen.
 **Datenbank austauschen:** Eine Datei am selben Ort gilt als Änderung – fehlende Lieder werden dann auf allen Geräten
 gelöscht. Soll die neue Datenbank der verbindliche Stand für alle sein, dient *Einstellungen → Datenbank → Alles neu
 hochladen* (mit Rückfrage): Alle Lieder gehen zum Server, was in dieser Datenbank fehlt, wird überall gelöscht, die anderen
 Geräte übernehmen den Stand. Vorher eine Sicherungskopie anlegen; eine leere Datenbank wird nie hochgeladen.
 Ohne HTTPS verweigert das Programm den Abgleich, weil das Token sonst offen übertragen würde.
 Logik: `services/server_sync.py`, Oberfläche: `ui/sync_ui.py`, Server: `server/sync.php`.
+
+Eine Spalte für CCLI-Nummern (Name enthält „ccli“) wird mit abgeglichen. Fehlt sie auf einem Gerät, legt der Abgleich sie
+dort an („CCLI“). Lieder ohne CCLI-Nummer werden dadurch nicht neu gesendet; nur Lieder mit Nummer gehen einmal erneut hoch.
 
 ## Remote: Steuerung per Handy über die eigene Website (von überall)
 
@@ -94,7 +99,55 @@ Wird die Seite oder das Design geändert, muss `server/remote.php` neu erzeugt w
 Programm: `services/remote_relay.py` (gemeinsame Bausteine: `services/remote_common.py`), Anbindung: `ui/web_remote_ui.py`,
 Server: `server/remote_template.php`.
 
+### Behringer X AIR 18: Lautstärke und Mute über die Webseite
+
+Einstellungen → ATEM → „Behringer X AIR Mischpult … steuern“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
+IP). LiedManager spricht das Pult per OSC/UDP (Port 10024) an und muss im selben Netzwerk stehen; das Pult selbst braucht keinen Internetzugang.
+Die Web-Fernsteuerung zeigt dann im Reiter „Kamera“ die Kanäle 1–8 mit Namen, Regler (lauter/leiser, Anzeige in dB) und Mute-Knopf.
+Neue `remote.php` hochladen (Zugangsdaten oben erneut eintragen). Logik: `services/xair.py`. Nicht an einem echten Pult getestet –
+erste Versuche bitte bei leiser Anlage.
+
+Der Knopf „Alles stumm“ unter den acht Reglern schaltet alle Kanäle auf einmal stumm.
+
+### Mehrere Computer
+
+Jeder Computer bekommt unter Einstellungen → Remote einen Namen (sonst der Rechnername). Laufen mehrere, erscheint im Browser oben eine Auswahl;
+Steuerung und Bilder gehen nur an den gewählten Computer. Dazu muss die neue `remote.php` auf den Server.
+
+### Probleme automatisch melden
+
+Bei einem unerwarteten Fehler schickt das Programm (wenn die Remote-Steuerung eingerichtet ist) Version, Betriebssystem und
+Fehlertext an `remote.php`. Du siehst es im Browser unter „Mehr“ → „Gemeldete Probleme“. Gleiche Fehler werden nur gezählt,
+höchstens 10 Meldungen pro Stunde, ohne Internet wartet die Meldung bis zum nächsten Start. Pfade im Benutzerordner werden gekürzt,
+es gehen keine Liedtexte, Dateien oder Zugangsdaten raus. Abschalten: Einstellungen → Remote → „Programmfehler automatisch melden“.
+**Wichtig:** dazu muss die neue `remote.php` auf den Server (mit deinen Zugangsdaten).
+
+### Bilder von zu Hause hochladen (auch wenn das Programm nicht läuft)
+
+In der Web-Steuerung unter „Bilder“ lassen sich jederzeit Bilder hochladen. Läuft LiedManager nicht, merkt sich die
+Website sie vor (bis zu 40 Bilder, 48 MB, 30 Tage) und das Programm holt sie beim nächsten Verbinden ab und legt sie in
+der Bilder-Ablage ab. „Vorgemerkte verwerfen“ löscht sie auf dem Server. „Alle entfernen“ (im Programm und im Browser)
+leert die Ablage und löscht die hochgeladenen Dateien auch von der Platte.
+
+### Aufnahmen auf die Website laden
+
+Einstellungen → Remote → „Aufnahmen automatisch auf die Website hochladen“ (Adresse und Token wie bei der Remote-Steuerung,
+die selbst nicht eingeschaltet sein muss). Jede gespeicherte Aufnahme wird in Stücken in den Ordner `aufnahmen` neben
+`remote.php` geladen; bricht die Verbindung ab, wird sie später fortgesetzt (Liste: `aufnahmen_hochladen.json` im
+Datenordner). Der Ordner ist nicht als Dateiliste einsehbar, die Dateien sind aber über ihre Adresse erreichbar –
+wer das nicht möchte, sollte den Ordner per KAS mit einem Passwort schützen. Nach dem Aktualisieren der Programmdatei
+`remote.php` neu hochladen (Zugangsdaten oben erneut eintragen).
+
+**Direkt in die WordPress-Mediathek:** Einstellungen → Remote → „Direkt in die WordPress-Mediathek laden“. Eintragen: Adresse der
+WordPress-Seite, Benutzername und ein *Anwendungspasswort* (WordPress → Benutzer → Profil → Anwendungspasswörter, Benutzerrolle
+mindestens „Autor“). Die Aufnahme geht dann über die REST-Schnittstelle (`/wp-json/wp/v2/media`) in die Mediathek; `remote.php` wird dafür nicht
+gebraucht. WordPress nimmt die Datei in einem Stück an, die Größe begrenzen `upload_max_filesize` und `post_max_size` des Servers. Ist `ffmpeg`
+installiert, wird die WAV-Aufnahme vorher in eine MP3 (Mono, 64 kbit/s) umgewandelt – etwa 28 MB pro Stunde statt etwa 160 MB. Logik:
+`services/wordpress_upload.py`.
+
 ## Prüfen
+
+Bei jedem Push läuft `.github/workflows/tests.yml` auf macOS und Windows (Smoke-Test). Die Zugangsdaten (Token, Passwörter) liegen im Schlüsselbund des Systems (`pip install keyring`). Die Datenbank wird vor dem Abgleich gesichert (Ordner „Datenbank-Sicherungen“, letzte 5).
 
 ```
 python tools/smoke_test.py
@@ -123,6 +176,8 @@ Voraussetzung ist Microsoft PowerPoint auf Mac oder Windows.
 
 ## Liste der gespielten Lieder
 
+Einstellungen → Anzeige → „Liedhistorie“ zeigt die Lieder nach Tag, mit Suche und den am häufigsten gespielten.
+
 Jedes Lied, das auf dem Beamer gezeigt wird, schreibt das Programm mit **Nummer und Titel** (sonst nichts) in **eine einzige
 Textdatei** `Gespielte Lieder.txt`, in die immer weiter eingetragen wird. Pro Tag steht eine Kopfzeile mit Wochentag und Datum,
 darunter die Lieder; dasselbe Lied direkt hintereinander nur einmal:
@@ -134,3 +189,26 @@ darunter die Lieder; dasselbe Lied direkt hintereinander nur einmal:
 Die Datei öffnest du unter *Einstellungen → Anzeige → „Liste der gespielten Lieder öffnen“*. Mit *Testmodus – nichts
 speichern* (im Fenstertitel steht dann „Testmodus“) läuft alles ohne Eintrag, zum Beispiel bei Proben. Das Speichern lässt sich
 dort auch ganz abschalten.
+
+### Meldung an CCLI
+
+LiedManager meldet nicht selbst an CCLI (dafür ist eine Partner-Zulassung bei CCLI nötig). Stattdessen bereitet es die Meldung vor:
+
+1. Die CCLI-Nummern stehen in einer Spalte der Datenbank (Name enthält „ccli“, z. B. `CCLI`); sie werden mit dem Datenbank-Abgleich
+   geteilt. Zum Füllen aus den Liederbüchern von evangeliums.net gibt es `tools/ccli_aus_liederbuch.py` (siehe dort).
+2. Beim Klick auf *„Bei CCLI melden“* kommen neu gespielte Lieder automatisch in die Meldeliste `CCLI-Meldung.csv`: nur die
+   CCLI-Nummern, eine pro Zeile (neue hinter noch offene; dasselbe Lied am selben Tag einmal). `Gespielte Lieder.txt` (Liedhistorie)
+   bleibt dabei unverändert; das Programm merkt sich, bis wohin schon übernommen wurde. Lieder ohne Nummer fehlen (die Statuszeile
+   zählt sie). Lieder von sonntags 9–10 Uhr und mittwochs 18:30–19:30 Uhr stehen mit „[nicht melden]“ in der Liste und werden
+   nicht gemeldet. Die Zeiten stellst du unter Einstellungen → Remote → CCLI-Meldung → „Nicht melden (Zeiten)“ ein (z. B. `So 09:00–10:00; Mi 18:30–19:30`,
+   leer = alles melden).
+3. Danach öffnet sich CCLI „Suchen & Melden“ (https://reporting.ccli.com/search) in einem Browser (du loggst dich selbst ein, das Programm sieht keine Zugangsdaten),
+   gibt jede Nummer ein, sucht und klickt „Lied melden“. Nach dem ersten Lied fragt es, ob alles stimmt (weiter / Rest automatisch /
+   aufhören). Eingegeben wird nur die CCLI-Nummer. Gemeldete Nummern verschwinden sofort aus `CCLI-Meldung.csv`, nicht Gemeldete bleiben drin;
+   ist alles gemeldet, wird die Datei gelöscht. Gemeldetes wird nirgends aufbewahrt (frühere Dateien `CCLI-Meldung-Ergebnis.csv` und
+   `Gespielte Lieder (gemeldet).txt` räumt das Programm beim Start weg).
+   Voraussetzung: `pip3 install -r requirements-ccli.txt`. Genutzt wird der installierte Google Chrome bzw. Microsoft Edge (auf Windows
+   immer vorhanden). Der Browser startet ganz normal, du meldest dich ohne Fernsteuerung an (Login-Seiten laden sonst endlos
+   neu); erst danach verbindet sich das Programm lokal mit diesem Fenster. Playwright kommt über `release.yml` auch in die
+   fertige App (`LiedManager.spec` packt es ein, sobald es im Build-Python installiert ist).
+   Logik: `services/ccli_melden.py`. Die Seite von CCLI wurde nicht automatisiert getestet – bitte mit wenigen Liedern ausprobieren.

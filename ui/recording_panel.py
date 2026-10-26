@@ -24,8 +24,10 @@ class RecordingPanel(QFrame):
         self.setStyleSheet(t.panel_style("RecPanel"))
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        # 58 px Leiste − 2 px Rahmen − 2 × 6 px = genau 44 px (Knopfhöhe): Knöpfe und Mitte sitzen exakt mittig
+        layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(t.GAP)
+        vcenter = Qt.AlignmentFlag.AlignVCenter
 
         self.rec_main_btn = QPushButton()
         self.rec_main_btn.setFixedSize(t.BTN, t.BTN)
@@ -33,10 +35,11 @@ class RecordingPanel(QFrame):
         self.rec_main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.rec_main_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.rec_main_btn.clicked.connect(recorder.toggle)
-        layout.addWidget(self.rec_main_btn)
+        layout.addWidget(self.rec_main_btn, 0, vcenter)
 
         middle = QVBoxLayout()
-        middle.setSpacing(8)
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(6)                 # 32 (Prediger) + 6 + 6 (Pegel) = 44 = Knopfhöhe
         row = QHBoxLayout()
         row.setSpacing(8)
 
@@ -65,7 +68,7 @@ class RecordingPanel(QFrame):
         self.rec_stop_btn.clicked.connect(self.save_recording)
         self._stop_opacity = QGraphicsOpacityEffect(self.rec_stop_btn)
         self.rec_stop_btn.setGraphicsEffect(self._stop_opacity)
-        layout.addWidget(self.rec_stop_btn)
+        layout.addWidget(self.rec_stop_btn, 0, vcenter)
 
         self._pulse_step = -1
         self._pulse_timer = QTimer(self)

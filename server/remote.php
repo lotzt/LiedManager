@@ -36,6 +36,14 @@ const MAX_UPLOAD     = 8388608;    // größtes Bild vom Handy (8 MB; als Text g
 const MAX_APP_BODY   = 4194304;    // größte Meldung vom Programm
 const MAX_FAILURES   = 5;          // falsche PINs je Adresse, dann Sperre (30 s, verdoppelt sich bis 10 min)
 const GLOBAL_FAILURES = 50;        // falsche PINs von allen Adressen in 10 Minuten, dann 5 Minuten Pause für alle
+const INBOX_MAX_FILES = 40;        // so viele Bilder werden für das Programm vorgemerkt, solange es nicht läuft
+const INBOX_MAX_BYTES = 50331648;  // … höchstens 48 MB zusammen
+const INBOX_KEEP     = 2592000;    // vorgemerkte Bilder werden nach 30 Tagen verworfen
+const REC_DIR        = 'aufnahmen'; // Ordner neben remote.php für die Aufnahmen aus dem Programm
+const REC_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg'];
+const REC_MAX_BYTES  = 2147483648; // größte Aufnahme (2 GB)
+const REPORT_KEEP     = 2592000;    // Problemmeldungen werden nach 30 Tagen gelöscht
+const REPORT_MAX      = 200;        // … und es bleiben höchstens so viele
 const UPLOAD_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
 
 @ini_set('memory_limit', '256M');
@@ -72,6 +80,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <input id="q" type="search" placeholder="Suche" autocomplete="off" aria-label="Lied suchen"
                title="Suche nach Liednummer (z. B. 12 oder p012), Titel oder Textstelle">
       </div>
+      <button id="gongBtn" class="round" title="Gong abspielen" aria-label="Gong"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg></button>
       <button id="moreBtn" class="round" title="Mehr: Datenbank-Abgleich, Version, Abmelden" aria-label="Mehr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     </div>
     <nav id="tabs" class="tabs" aria-label="Bereiche">
@@ -82,6 +91,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     </nav>
   </header>
   <div class="status">
+    <select id="deviceSel" class="chip" title="Welcher Computer bedient wird" aria-label="Computer" hidden></select>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
@@ -132,7 +142,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <button id="pauseBtn" class="round" title="Pausentimer starten" aria-label="Pausentimer starten oder beenden"><span class="i-play"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg></span><span class="i-pause"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg></span></button>
         <button id="pauseChevron" class="chev" type="button" title="Ansagen ein- oder ausklappen" aria-label="Ansagen ein- oder ausklappen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       </div>
-      <textarea id="lines" rows="10" cols="47" wrap="off" spellcheck="false" hidden placeholder="Ansagen" aria-label="Ansagen"
+      <textarea id="lines" rows="11" cols="50" wrap="off" spellcheck="false" hidden placeholder="Ansagen" aria-label="Ansagen"
                 title="Ansagen für die Pausenfolie – eine Zeile pro Ansage"></textarea>
     </section>
   </section>
@@ -151,6 +161,12 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <button class="pill" data-atem="default" title="Auf den Standardkanal schalten">Standard</button>
       </div>
     </div>
+    <div id="mixerCard" class="card" hidden>
+      <div class="caption">Mischpult (X AIR) <span id="mixerState" class="chip" title="Verbindung zum Mischpult">…</span></div>
+      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Mischpult → „X AIR“ (IP-Adresse eintragen).</p>
+      <div id="mixerList"></div>
+      <button id="mixerMuteAll" type="button" class="pill" title="Alle acht Kanäle stummschalten">Alles stumm</button>
+    </div>
   </section>
 
   <section id="tab-images" class="tabpage" hidden>
@@ -167,16 +183,25 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
       <div class="caption">Abgelegte Bilder – antippen zeigt auf dem Beamer</div>
       <div id="thumbs" class="thumbs"></div>
       <p id="noImages" class="muted">Noch keine Bilder. Lade welche vom Handy hoch.</p>
+      <p id="queueNote" class="muted" hidden></p>
       <div class="row">
         <label class="pill filebtn" title="Bilder von diesem Gerät hinzufügen">Bilder hochladen
           <input id="upload" type="file" accept="image/*" multiple hidden>
         </label>
         <button id="clearBtn" class="pill" title="Alle abgelegten Bilder entfernen">Alle entfernen</button>
       </div>
+      <div class="row" id="queueRow" hidden>
+        <button id="queueClearBtn" class="pill" title="Vorgemerkte Bilder auf dem Server verwerfen">Vorgemerkte verwerfen</button>
+      </div>
     </div>
   </section>
 
   <section id="tab-more" class="tabpage" hidden>
+    <div id="reportsCard" class="card" hidden>
+      <div class="caption">Gemeldete Probleme</div>
+      <div id="reportsList"></div>
+      <div class="row"><button id="reportsClearBtn" class="pill" title="Alle gemeldeten Probleme löschen">Liste leeren</button></div>
+    </div>
     <div class="card">
       <div class="caption">Datenbank-Abgleich</div>
       <p id="syncStatus" class="muted">–</p>
@@ -245,9 +270,9 @@ input[type=search] { -webkit-appearance: none; appearance: none; padding-left: 4
 input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; }
 input.small { height: 32px; padding: 0 10px; background: var(--bg); }
 textarea {
-  /* genau 47 Zeichen breit und 10 Zeilen hoch (Schrift mit fester Breite), ohne Bildlauf */
-  width: calc(47ch + 26px); height: 218px; padding: 8px 12px; resize: none; overflow: hidden; white-space: pre; overflow-wrap: normal;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 12px; line-height: 20px;
+  /* genau 50 Zeichen breit und 11 Zeilen hoch (Schrift mit fester Breite), ohne Bildlauf */
+  width: calc(50ch + 26px); height: 238px; padding: 8px 12px; resize: none; overflow: hidden; white-space: pre; overflow-wrap: normal;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 11px; line-height: 20px;
   color: var(--text-2); letter-spacing: 0;
 }
 input[type=time] { color-scheme: dark; }
@@ -320,6 +345,7 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
   font-size: var(--fs-small); color: var(--text-2); border: 1px solid var(--border); border-radius: 14px;
   padding: 3px 10px; background: var(--surface);
 }
+select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
@@ -358,6 +384,14 @@ input[type=range]::-webkit-slider-thumb {
   background: var(--accent-light); box-shadow: 0 0 6px rgba(217,164,106,.55);
 }
 input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 6px; border: 0; background: var(--accent-light); }
+
+#mixerMuteAll { margin-top: 14px; width: 100%; justify-content: center; border-color: #C0504D; color: #F0B8B6; }
+#reportsList details { margin: 8px 0; }
+#reportsList pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.mixrow { display: grid; grid-template-columns: 44% 1fr 52px; gap: 10px; align-items: center; margin: 10px 0 0; }
+.mixrow .pill { justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mixrow .pill.muted { border-color: #C0504D; color: #F0B8B6; background: rgba(192,80,77,.16); }
+.mixdb { text-align: right; font-size: var(--fs-small); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Aufnahme */
 .recmid { display: flex; gap: 8px; align-items: center; }
@@ -429,6 +463,9 @@ const PAGE_JS = <<<'LM_PAGE_JS'
 (function () {
   'use strict';
   var TOKEN_KEY = 'lm_token';
+  var DEVICE_KEY = 'lm_device';
+  var device = '';
+  try { device = localStorage.getItem(DEVICE_KEY) || ''; } catch (e) {}
   var RELAY = '__SELF__';      // leer = Programm direkt; sonst Name des PHP-Skripts auf der Website
   var token = '';
   try { token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { token = ''; }
@@ -477,6 +514,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     if (token) {
       if (RELAY) { headers['X-LM-Token'] = token; } else { headers['Authorization'] = 'Bearer ' + token; }
     }
+    if (device) { headers['X-LM-Device'] = device; }
     var init = { method: method, headers: headers, cache: 'no-store' };
     if (raw) {
       init.body = raw;
@@ -523,9 +561,36 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     $('pin').value = '';
     $('pin').focus();
   }
+  var deviceSig = '';
+  function refreshDevices() {
+    return request('GET', '/api/devices').then(function (r) {
+      var list = r.devices || [];
+      var names = list.map(function (d) { return d.name; });
+      if (!device || names.indexOf(device) < 0) { device = r.current || names[0] || ''; }
+      var sel = $('deviceSel');
+      var sig = device + '|' + list.map(function (d) { return d.name + (d.online ? '+' : '-'); }).join(',');
+      if (sig === deviceSig) { return; }
+      deviceSig = sig;
+      sel.textContent = '';
+      list.forEach(function (d) {
+        var opt = el('option', '', d.name + (d.online ? '' : ' (aus)'));
+        opt.value = d.name;
+        if (d.name === device) { opt.selected = true; }
+        sel.appendChild(opt);
+      });
+      sel.hidden = list.length < 2;
+    }).catch(function () {});
+  }
+  on('deviceSel', 'change', function () {
+    device = $('deviceSel').value;
+    try { localStorage.setItem(DEVICE_KEY, device); } catch (e) {}
+    location.reload();
+  });
   function showApp() {
     $('login').hidden = true;
     $('app').hidden = false;
+    refreshDevices();
+    setInterval(function () { if (!document.hidden) { refreshDevices(); } }, 15000);   // neue oder ausgeschaltete Computer nachführen
     refresh();
     if (!pollTimer) { pollTimer = setInterval(function () { if (!document.hidden) { refresh(); } }, 1000); }
   }
@@ -543,15 +608,50 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   }
 
   /* ---------------- Zustand holen und anzeigen ---------------- */
+  var reportsLoaded = false;
   function refresh() {
     return request('GET', '/api/state').then(function (s) {
       state = s;
       setConn(true);
+      showQueue(0);
       render(s);
+      if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); }
     });
+  }
+  /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
+  function showQueue(n) {
+    $('queueNote').hidden = !n;
+    $('queueRow').hidden = !n;
+    if (n) {
+      $('queueNote').textContent = n + (n === 1 ? ' Bild ist' : ' Bilder sind') +
+        ' vorgemerkt und werden beim nächsten Start des Programms übernommen.';
+    }
+  }
+  function renderReports(list) {
+    var box = $('reportsList');
+    $('reportsCard').hidden = !(list && list.length);
+    box.textContent = '';
+    (list || []).forEach(function (r) {
+      var item = el('details', '');
+      var head = el('summary', '', new Date(r.created * 1000).toLocaleString('de-DE') + ' · ' + r.title +
+        (Number(r.n) > 1 ? ' (' + r.n + '×)' : ''));
+      item.appendChild(head);
+      item.appendChild(el('pre', 'muted', 'Version ' + r.version + ' · ' + r.system + '\n' + (r.detail || '')));
+      box.appendChild(item);
+    });
+  }
+  function refreshReports() {
+    return request('GET', '/api/reports').then(function (r) { renderReports(r.reports); }).catch(function () {});
+  }
+  $('reportsClearBtn').addEventListener('click', function () {
+    request('POST', '/api/reports_clear', {}).then(function () { renderReports([]); })
+      .catch(function (err) { toast(err.message, true); });
+  });
+  function refreshQueue() {
+    return request('GET', '/api/inbox').then(function (r) { showQueue(r.pending || 0); }).catch(function () {});
   }
   function setConn(ok) {
     var chip = $('conn');
@@ -680,10 +780,104 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     }
     $('camCloseBtn').disabled = !s.cameras.some(function (c) { return c.fullscreen; });
     $('atemCard').hidden = !s.atem.enabled;
+    renderMixer(s.mixer);
+    if (s.atem.channels) {
+      var names = { presentation: 'Präsentation', camera: 'Kamera', default: 'Standard' };
+      Array.prototype.forEach.call(document.querySelectorAll('button[data-atem]'), function (b) {
+        var no = s.atem.channels[b.dataset.atem];
+        b.textContent = names[b.dataset.atem] + (no ? ' (Eingang ' + no + ')' : '');
+      });
+    }
   }
 
+  /* ---------------- Mischpult (X AIR) ---------------- */
+  var mixDrag = {};                       // Kanal -> Zeitpunkt, bis zu dem der Regler nicht überschrieben wird
+  var mixMute = {};
+  function faderDb(level) {
+    if (level <= 0) { return '−∞'; }
+    var db = level >= 0.5 ? level * 40 - 30 : level >= 0.25 ? level * 80 - 50 : level >= 0.0625 ? level * 160 - 70 : level * 480 - 90;
+    return (db > 0 ? '+' : db < 0 ? '−' : '') + Math.abs(db).toFixed(1);
+  }
+  function renderMixer(mx) {
+    var card = $('mixerCard');
+    card.hidden = !mx;
+    if (card.hidden) { return; }
+    var chip = $('mixerState');
+    var off = !mx.enabled;
+    $('mixerOff').hidden = !off;
+    $('mixerList').hidden = off;
+    $('mixerMuteAll').hidden = off;
+    chip.textContent = off ? 'aus' : mx.connected ? 'verbunden' : 'nicht erreichbar';
+    if (off) { return; }
+    var list = $('mixerList');
+    var channels = mx.channels || [];
+    if (list.children.length !== channels.length) {
+      list.textContent = '';
+      channels.forEach(function (ch) {
+        var row = el('div', 'mixrow');
+        row.dataset.ch = String(ch.n);
+        var mute = el('button', 'pill', '');
+        mute.type = 'button';
+        mute.dataset.mute = String(ch.n);
+        mute.title = 'Kanal stummschalten / wieder einschalten';
+        var fader = el('input', '');
+        fader.type = 'range'; fader.min = '0'; fader.max = '1'; fader.step = '0.005'; fader.value = '0';
+        fader.dataset.fader = String(ch.n);
+        fader.title = 'Lauter / leiser';
+        fader.setAttribute('aria-label', 'Lautstärke Kanal ' + ch.n);
+        var db = el('span', 'mixdb', '');
+        row.appendChild(mute); row.appendChild(fader); row.appendChild(db);
+        list.appendChild(row);
+      });
+    }
+    channels.forEach(function (ch, i) {
+      var row = list.children[i];
+      var mute = row.children[0], fader = row.children[1], db = row.children[2];
+      mixMute[ch.n] = !!ch.mute;
+      mute.textContent = ch.n + (ch.name ? ' ' + ch.name : '');
+      mute.classList.toggle('muted', !!ch.mute);
+      if (ch.level !== null && ch.level !== undefined && !(mixDrag[ch.n] > Date.now())) {
+        fader.value = String(ch.level);
+        fader.style.setProperty('--p', (ch.level * 100) + '%');
+        db.textContent = faderDb(ch.level);
+      }
+    });
+  }
+  function bindMixer() {
+    var list = $('mixerList');
+    list.addEventListener('input', function (e) {
+      var f = e.target.closest('input[data-fader]');
+      if (!f) { return; }
+      mixDrag[f.dataset.fader] = Date.now() + 2500;
+      f.style.setProperty('--p', (Number(f.value) * 100) + '%');
+      f.parentNode.children[2].textContent = faderDb(Number(f.value));
+    });
+    list.addEventListener('change', function (e) {
+      var f = e.target.closest('input[data-fader]');
+      if (!f) { return; }
+      mixDrag[f.dataset.fader] = Date.now() + 1500;
+      actQuiet('mixer_level', { channel: Number(f.dataset.fader), level: Number(f.value) });
+    });
+    list.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-mute]');
+      if (!b) { return; }
+      var n = Number(b.dataset.mute);
+      var next = !mixMute[n];
+      mixMute[n] = next;
+      b.classList.toggle('muted', next);
+      actQuiet('mixer_mute', { channel: n, mute: next });
+    });
+  }
+  bindMixer();
+  $('mixerMuteAll').addEventListener('click', function () {
+    Array.prototype.forEach.call(document.querySelectorAll('#mixerList button[data-mute]'), function (b) {
+      mixMute[Number(b.dataset.mute)] = true; b.classList.add('muted');
+    });
+    actQuiet('mixer_mute_all', {});
+  });
+
   var pauseOpen = false;
-  var maxLines = 10, maxChars = 47;
+  var maxLines = 11, maxChars = 50;
   function clampLines() {
     var box = $('lines');
     var lines = box.value.split('\n').slice(0, maxLines).map(function (l) { return l.slice(0, maxChars); });
@@ -780,6 +974,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
       $('q').value = '';
     }).catch(function () {});
   });
+  on('gongBtn', 'click', function () { actQuiet('gong'); });
   on('showBtn', 'click', function () { actQuiet('show_song'); });
   on('closeBeamerBtn', 'click', function () { actQuiet('beamer_close'); });
   on('a1', 'click', function () { actQuiet('audio_play', { slot: 0 }); });
@@ -817,18 +1012,25 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   on('clearBtn', 'click', function () {
     if (window.confirm('Alle abgelegten Bilder entfernen?')) { actQuiet('images_clear'); }
   });
+  on('queueClearBtn', 'click', function () {
+    if (window.confirm('Vorgemerkte Bilder auf dem Server verwerfen?')) {
+      request('POST', '/api/inbox_clear', {}).then(function () { showQueue(0); }).catch(function (err) { toast(err.message, true); });
+    }
+  });
   on('upload', 'change', function () {
     var files = Array.prototype.slice.call($('upload').files);
     $('upload').value = '';
-    var done = 0, failed = 0;
+    var done = 0, failed = 0, queued = 0;
     files.reduce(function (chain, file) {
       return chain.then(function () {
         return request('POST', '/api/upload?name=' + encodeURIComponent(file.name), undefined, file).then(function (r) {
+          if (r.queued) { queued += 1; refreshQueue(); }
           done += r.added || 0;
           failed += r.failed || 0;
         }).catch(function (err) { failed += 1; toast(err.message, true); });
       });
     }, Promise.resolve()).then(function () {
+      if (queued) { toast(queued + (queued === 1 ? ' Bild' : ' Bilder') + ' vorgemerkt – kommen beim nächsten Programmstart'); }
       if (done) { toast(done + (done === 1 ? ' Bild' : ' Bilder') + ' hinzugefügt'); }
       refresh();
     });
@@ -990,7 +1192,61 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_tables($db);                 // beim allerersten Aufruf
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_inbox LIMIT 1');
+    } catch (PDOException $e) {
+        create_inbox($db);                  // Update von einer älteren remote.php
+    }
+    try {
+        $db->query('SELECT dev FROM lm_rm_jobs LIMIT 1');
+    } catch (PDOException $e) {
+        create_devices($db);                // Update: mehrere Computer
+    }
+    try {
+        $db->query('SELECT did FROM lm_rm_devices LIMIT 1');
+    } catch (PDOException $e) {
+        $db->exec('ALTER TABLE lm_rm_devices ADD COLUMN did VARCHAR(20) NOT NULL DEFAULT ""');
+    }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_reports LIMIT 1');
+    } catch (PDOException $e) {
+        create_reports($db);                // Update von einer älteren remote.php
+    }
     return $db;
+}
+
+function create_devices(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_devices (
+        name  VARCHAR(40) NOT NULL PRIMARY KEY,
+        alive INT NOT NULL DEFAULT 0,
+        state MEDIUMTEXT NULL,
+        did   VARCHAR(20) NOT NULL DEFAULT ""
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    $db->exec('ALTER TABLE lm_rm_jobs ADD COLUMN dev VARCHAR(40) NOT NULL DEFAULT ""');
+    $db->exec('ALTER TABLE lm_rm_inbox ADD COLUMN dev VARCHAR(40) NOT NULL DEFAULT ""');
+}
+
+/** Name des Computers: nur harmlose Zeichen, höchstens 40. */
+function dev_clean(string $name): string {
+    $name = trim((string)preg_replace('/[^\p{L}\p{N} ._-]/u', '', $name));
+    return mb_substr($name, 0, 40);
+}
+
+/** Der Computer, um den es in dieser Anfrage geht (Programm: aus der Anfrage; Browser: gewählt, sonst der zuletzt aktive). */
+function cur_dev(?string $set = null): string {
+    static $dev = null;
+    if ($set !== null) {
+        $dev = $set;
+    }
+    return $dev ?? '';
+}
+
+function browser_dev(PDO $db): string {
+    $dev = dev_clean((string)($_SERVER['HTTP_X_LM_DEVICE'] ?? ''));
+    if ($dev === '') {
+        $dev = (string)$db->query('SELECT name FROM lm_rm_devices ORDER BY alive DESC LIMIT 1')->fetchColumn();
+    }
+    return $dev;
 }
 
 function create_tables(PDO $db): void {
@@ -1026,14 +1282,199 @@ function create_tables(PDO $db): void {
     $db->exec('INSERT IGNORE INTO lm_rm_meta (id, alive, state) VALUES (1, 0, NULL)');
 }
 
+function create_inbox(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_inbox (
+        id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        created INT NOT NULL,
+        name    VARCHAR(80) NOT NULL,
+        body    LONGBLOB NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+function create_reports(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_reports (
+        id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        created INT NOT NULL,
+        fp      CHAR(16) NOT NULL,
+        version VARCHAR(40) NOT NULL,
+        system  VARCHAR(80) NOT NULL,
+        title   VARCHAR(300) NOT NULL,
+        detail  TEXT NULL,
+        n       INT NOT NULL DEFAULT 1,
+        INDEX idx_fp (fp)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+/** Meldung vom Programm speichern; gleiche Probleme (gleicher Fingerabdruck) werden nur hochgezählt. */
+function store_report(PDO $db, array $in): void {
+    $fp = preg_replace('/[^0-9a-f]/', '', strtolower((string)($in['fp'] ?? '')));
+    $fp = substr($fp, 0, 16);
+    if (strlen($fp) < 8) {
+        fail(400, 'Ungültige Meldung.');
+    }
+    $db->prepare('DELETE FROM lm_rm_reports WHERE created < ?')->execute([time() - REPORT_KEEP]);
+    $update = $db->prepare('UPDATE lm_rm_reports SET n = n + 1, created = ? WHERE fp = ? AND created > ?');
+    $update->execute([time(), $fp, time() - 86400]);
+    if ($update->rowCount() === 0) {
+        $db->prepare('INSERT INTO lm_rm_reports (created, fp, version, system, title, detail) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([time(), $fp, substr((string)($in['version'] ?? ''), 0, 40), substr((string)($in['system'] ?? ''), 0, 80),
+                mb_substr((string)($in['title'] ?? ''), 0, 300), mb_substr((string)($in['detail'] ?? ''), 0, 6000)]);
+    }
+    $db->exec('DELETE FROM lm_rm_reports WHERE id <= (SELECT m FROM (SELECT MAX(id) - ' . REPORT_MAX . ' AS m FROM lm_rm_reports) x)');
+}
+
+function inbox_pending(PDO $db): int {
+    $q = $db->prepare('SELECT COUNT(*) FROM lm_rm_inbox WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    return (int)$q->fetchColumn();
+}
+
+/** Bild vormerken, solange das Programm nicht läuft; es wird beim nächsten Verbinden abgeholt. */
+function queue_upload(PDO $db, string $name, string $data): void {
+    $db->prepare('DELETE FROM lm_rm_inbox WHERE created < ?')->execute([time() - INBOX_KEEP]);
+    $row = $db->query('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS bytes FROM lm_rm_inbox')
+        ->fetch(PDO::FETCH_ASSOC);
+    if ((int)$row['n'] >= INBOX_MAX_FILES || (int)$row['bytes'] + strlen($data) > INBOX_MAX_BYTES) {
+        fail(507, 'Der Zwischenspeicher auf dem Server ist voll. Bitte zuerst das Programm starten, '
+            . 'damit die vorgemerkten Bilder abgeholt werden.');
+    }
+    $db->prepare('INSERT INTO lm_rm_inbox (created, name, body, dev) VALUES (?, ?, ?, ?)')->execute([time(), $name, $data, cur_dev()]);
+    json_out(['queued' => true, 'added' => 0, 'failed' => 0, 'pending' => inbox_pending($db)], 202);
+}
+
 function app_alive(PDO $db): bool {
-    $alive = (int)$db->query('SELECT alive FROM lm_rm_meta WHERE id = 1')->fetchColumn();
+    $q = $db->prepare('SELECT alive FROM lm_rm_devices WHERE name = ?');
+    $q->execute([cur_dev()]);
+    $alive = (int)$q->fetchColumn();
     return $alive > 0 && time() - $alive <= APP_TIMEOUT;
 }
 
+/** Kennung des Computers aus der Anfrage des Programms (bleibt beim Umbenennen gleich). */
+function cur_did(?string $set = null): string {
+    static $did = '';
+    if ($set !== null) {
+        $did = $set;
+    }
+    return $did;
+}
+
+/** Ein umbenannter Computer ersetzt seinen alten Namen; Einträge ohne Kennung (alte Programmversion) verschwinden nach 5 Minuten. */
+function device_cleanup(PDO $db): void {
+    $did = cur_did();
+    if ($did !== '') {
+        $q = $db->prepare('SELECT name FROM lm_rm_devices WHERE did = ? AND name <> ?');
+        $q->execute([$did, cur_dev()]);
+        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $old) {
+            $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
+            $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
+        }
+    }
+    $db->prepare('DELETE FROM lm_rm_devices WHERE did = "" AND alive < ?')->execute([time() - 300]);
+}
+
 function touch_alive(PDO $db): void {
-    $q = $db->prepare('UPDATE lm_rm_meta SET alive = ? WHERE id = 1');
-    $q->execute([time()]);
+    $q = $db->prepare('INSERT INTO lm_rm_devices (name, alive, did) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE alive = VALUES(alive), did = VALUES(did)');
+    $q->execute([cur_dev(), time(), cur_did()]);
+    device_cleanup($db);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Aufnahmen aus dem Programm (in Stücken, mit Fortsetzen)
+// ---------------------------------------------------------------------------------------------
+function rec_dir(): string {
+    $dir = __DIR__ . '/' . REC_DIR;
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+        fail(500, 'Der Ordner "' . REC_DIR . '" konnte auf dem Server nicht angelegt werden.');
+    }
+    if (!is_file($dir . '/.htaccess')) {
+        @file_put_contents($dir . '/.htaccess', "Options -Indexes\n");   // keine Dateiliste im Browser
+    }
+    if (!is_file($dir . '/index.html')) {
+        @file_put_contents($dir . '/index.html', '');
+    }
+    return $dir;
+}
+
+function rec_name(string $name): string {
+    $name = basename(str_replace('\\', '/', $name));
+    $name = (string)preg_replace('/[^\p{L}\p{N} ._()\-]/u', '_', $name);
+    $name = trim($name, '. ');
+    $ok = false;
+    foreach (REC_EXTENSIONS as $extension) {
+        if (strtolower(substr($name, -strlen($extension))) === $extension) {
+            $ok = true;
+        }
+    }
+    if (!$ok || $name === '' || strlen($name) > 120) {
+        fail(415, 'Dateiname oder Dateityp nicht erlaubt.');
+    }
+    return $name;
+}
+
+function rec_unique(string $dir, string $name): string {
+    $dot = strrpos($name, '.');
+    $base = substr($name, 0, $dot);
+    $ext = substr($name, $dot);
+    $candidate = $name;
+    for ($i = 1; is_file($dir . '/' . $candidate); $i++) {
+        $candidate = $base . ' (' . $i . ')' . $ext;
+    }
+    return $candidate;
+}
+
+function rec_size(array $in): void {
+    $part = rec_dir() . '/' . rec_name((string)($in['name'] ?? '')) . '.part';
+    clearstatcache();
+    json_out(['size' => is_file($part) ? (int)filesize($part) : 0]);
+}
+
+function rec_put(array $in): void {
+    $dir = rec_dir();
+    $name = rec_name((string)($in['name'] ?? ''));
+    $offset = (int)($in['offset'] ?? 0);
+    $data = base64_decode((string)($in['data'] ?? ''), true);
+    if ($data === false || $offset < 0) {
+        fail(400, 'Ungültiges Stück.');
+    }
+    $part = $dir . '/' . $name . '.part';
+    $handle = @fopen($part, 'c+b');
+    if (!$handle) {
+        fail(500, 'Die Datei konnte auf dem Server nicht angelegt werden.');
+    }
+    flock($handle, LOCK_EX);
+    clearstatcache();
+    $have = (int)filesize($part);
+    if ($offset !== $have && !($offset === 0)) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        fail(409, 'Falsche Position.');
+    }
+    if ($offset === 0) {
+        ftruncate($handle, 0);
+    }
+    if ($offset + strlen($data) > REC_MAX_BYTES) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        @unlink($part);
+        fail(413, 'Die Aufnahme ist größer als erlaubt.');
+    }
+    fseek($handle, $offset);
+    $written = fwrite($handle, $data);
+    fflush($handle);
+    flock($handle, LOCK_UN);
+    fclose($handle);
+    if ($written === false || $written !== strlen($data)) {
+        fail(500, 'Schreiben auf dem Server fehlgeschlagen (Speicherplatz?).');
+    }
+    $final = $name;
+    if (!empty($in['last'])) {
+        $final = rec_unique($dir, $name);
+        if (!@rename($part, $dir . '/' . $final)) {
+            fail(500, 'Die Datei konnte nicht abgeschlossen werden.');
+        }
+    }
+    json_out(['ok' => true, 'size' => $offset + strlen($data), 'name' => $final]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1122,8 +1563,8 @@ function run_job(PDO $db, string $kind, string $name, ?string $body, int $wait):
     }
     $now = time();
     $db->prepare('DELETE FROM lm_rm_jobs WHERE created < ?')->execute([$now - 300]);
-    $db->prepare('INSERT INTO lm_rm_jobs (created, kind, name, body) VALUES (?, ?, ?, ?)')
-        ->execute([$now, $kind, $name, $body]);
+    $db->prepare('INSERT INTO lm_rm_jobs (created, kind, name, body, dev) VALUES (?, ?, ?, ?, ?)')
+        ->execute([$now, $kind, $name, $body, cur_dev()]);
     $id = (int)$db->lastInsertId();
 
     $deadline = microtime(true) + $wait;
@@ -1154,9 +1595,20 @@ function browser_api(string $api): void {
     if (!authorized($db)) {
         fail(401, 'Bitte mit der PIN anmelden.');
     }
+    cur_dev(browser_dev($db));
+    if ($api === 'devices' && $method === 'GET') {
+        $rows = $db->query('SELECT name, alive FROM lm_rm_devices ORDER BY name')->fetchAll(PDO::FETCH_ASSOC);
+        $list = [];
+        foreach ($rows as $row) {
+            $list[] = ['name' => $row['name'], 'online' => (int)$row['alive'] > 0 && time() - (int)$row['alive'] <= APP_TIMEOUT];
+        }
+        json_out(['devices' => $list, 'current' => cur_dev()]);
+    }
 
     if ($api === 'state' && $method === 'GET') {
-        $row = $db->query('SELECT alive, state FROM lm_rm_meta WHERE id = 1')->fetch(PDO::FETCH_ASSOC);
+        $q = $db->prepare('SELECT alive, state FROM lm_rm_devices WHERE name = ?');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
         if (!$row || $row['state'] === null || (int)$row['alive'] === 0 || time() - (int)$row['alive'] > APP_TIMEOUT) {
             fail(503, 'Das Programm ist gerade nicht erreichbar (nicht gestartet oder ohne Internet).');
         }
@@ -1187,7 +1639,27 @@ function browser_api(string $api): void {
         if ($data === '') {
             fail(400, 'Die Datei ist leer.');
         }
+        if (!app_alive($db)) {
+            queue_upload($db, $name, $data);      // Programm läuft nicht: vormerken statt ablehnen
+        }
         run_job($db, 'upload', $name, base64_encode($data), UPLOAD_WAIT);
+    }
+
+    if ($api === 'inbox' && $method === 'GET') {
+        json_out(['pending' => inbox_pending($db)]);
+    }
+    if ($api === 'reports' && $method === 'GET') {
+        $rows = $db->query('SELECT id, created, version, system, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
+            ->fetchAll(PDO::FETCH_ASSOC);
+        json_out(['reports' => $rows]);
+    }
+    if ($api === 'reports_clear' && $method === 'POST') {
+        $db->exec('DELETE FROM lm_rm_reports');
+        json_out(['reports' => []]);
+    }
+    if ($api === 'inbox_clear' && $method === 'POST') {
+        $db->prepare('DELETE FROM lm_rm_inbox WHERE dev = ?')->execute([cur_dev()]);
+        json_out(['pending' => 0]);
     }
 
     if ($method === 'POST' && preg_match('/^[a-z_]{1,40}$/', $api)) {
@@ -1218,6 +1690,9 @@ function app_api(): void {
         exit;
     }
     $db = db();
+    $dev = dev_clean((string)($in['dev'] ?? ''));
+    cur_dev($dev === '' ? 'Computer' : $dev);
+    cur_did(substr((string)preg_replace('/[^a-z0-9]/', '', strtolower((string)($in['did'] ?? ''))), 0, 20));
     $action = (string)($in['action'] ?? '');
 
     if ($action === 'poll') {
@@ -1225,11 +1700,12 @@ function app_api(): void {
         $db->prepare('DELETE FROM lm_rm_jobs WHERE created < ?')->execute([time() - 300]);
         $hold = max(0, min(HOLD, (int)($in['hold'] ?? HOLD)));
         $deadline = microtime(true) + $hold;
-        $select = $db->prepare('SELECT id, kind, name, body FROM lm_rm_jobs WHERE status = 0 ORDER BY id LIMIT 5');
+        $select = $db->prepare('SELECT id, kind, name, body FROM lm_rm_jobs WHERE status = 0 AND dev = ? ORDER BY id LIMIT 5');
         $claim = $db->prepare('UPDATE lm_rm_jobs SET status = 1 WHERE id = ? AND status = 0');
         $lastTouch = time();
+        $pending = inbox_pending($db);               // vorgemerkte Bilder: Programm soll sie gleich abholen
         while (true) {
-            $select->execute();
+            $select->execute([cur_dev()]);
             $jobs = [];
             foreach ($select->fetchAll(PDO::FETCH_ASSOC) as $job) {
                 $claim->execute([(int)$job['id']]);
@@ -1238,8 +1714,8 @@ function app_api(): void {
                         'body' => $job['body'] === null ? '' : (string)$job['body']];
                 }
             }
-            if ($jobs || microtime(true) >= $deadline) {
-                json_out(['format' => FORMAT, 'jobs' => $jobs]);
+            if ($jobs || $pending > 0 || microtime(true) >= $deadline) {
+                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending]);
             }
             if (time() - $lastTouch >= 5) {
                 touch_alive($db);
@@ -1254,7 +1730,9 @@ function app_api(): void {
         if ($data === '' || strlen($data) > 1048576 || !is_array(json_decode($data, true))) {
             fail(400, 'Ungültiger Zustand.');
         }
-        $db->prepare('UPDATE lm_rm_meta SET alive = ?, state = ? WHERE id = 1')->execute([time(), $data]);
+        $db->prepare('INSERT INTO lm_rm_devices (name, alive, state, did) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE alive = VALUES(alive), state = VALUES(state), did = VALUES(did)')
+            ->execute([cur_dev(), time(), $data, cur_did()]);
+        device_cleanup($db);
         json_out(['ok' => true]);
     }
 
@@ -1273,8 +1751,45 @@ function app_api(): void {
         json_out(['ok' => true]);
     }
 
+    if ($action === 'rec_size') {
+        rec_size($in);
+    }
+
+    if ($action === 'rec_put') {
+        rec_put($in);
+    }
+
+    if ($action === 'inbox_get') {
+        $q = $db->prepare('SELECT id, name, body FROM lm_rm_inbox WHERE dev = ? ORDER BY id LIMIT 1');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        json_out(['item' => $row ? ['id' => (int)$row['id'], 'name' => $row['name'],
+            'body' => base64_encode((string)$row['body'])] : null]);
+    }
+
+    if ($action === 'inbox_done') {
+        $db->prepare('DELETE FROM lm_rm_inbox WHERE id = ?')->execute([(int)($in['id'] ?? 0)]);
+        json_out(['ok' => true]);
+    }
+
+    if ($action === 'rename') {
+        // Computer wurde umbenannt: alten Namen entfernen, vorgemerkte Bilder gehen an den neuen Namen
+        $old = dev_clean((string)($in['old'] ?? ''));
+        if ($old !== '' && $old !== cur_dev()) {
+            $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
+            $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
+        }
+        json_out(['ok' => true]);
+    }
+
+    if ($action === 'report') {
+        store_report($db, $in);
+        json_out(['ok' => true]);
+    }
+
     if ($action === 'bye') {
-        $db->exec('UPDATE lm_rm_meta SET alive = 0 WHERE id = 1');
+        $db->prepare('UPDATE lm_rm_devices SET alive = 0 WHERE name = ?')->execute([cur_dev()]);
         json_out(['ok' => true]);
     }
 

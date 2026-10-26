@@ -36,15 +36,78 @@ STATE_EVERY = 1.0               # so oft wird der Zustand geprüft …
 STATE_KEEPALIVE = 5.0           # … und mindestens so oft gesendet, auch wenn er gleich geblieben ist
 RETRY_MAX = 30                  # Wartezeit bei Fehlern wächst bis zu diesem Wert (Sekunden)
 WORKERS = 4
+INBOX_TIMEOUT = 60              # vorgemerkte Bilder können einige MB groß sein
+INBOX_BATCH = 40                # höchstens so viele Bilder je Abholung
+
+
+KEY_DEVICE_NAME = "web_device_name"
+KEY_DEVICE_LAST = "web_device_last"      # unter diesem Namen war der Computer zuletzt bei der Website angemeldet
+
+
+def forget_old_name(url: str, token: str, device: str) -> None:
+    """Wurde der Computer umbenannt, den alten Namen auf der Website löschen (Aufruf im Hintergrund, Fehler sind egal)."""
+    from services.settings import app_settings
+    settings = app_settings()
+    last = str(settings.value(KEY_DEVICE_LAST, "", type=str))
+    if last and last != device:
+        try:
+            RemoteApi(url, token, 10, device).call("rename", old=last)
+        except Exception:
+            return                                              # beim nächsten Verbinden nochmal versuchen
+    settings.setValue(KEY_DEVICE_LAST, device)
+
+
+_device_id_cache = []
+
+
+def device_id() -> str:
+    """Feste Kennung dieses Computers (bleibt beim Umbenennen gleich): so ersetzt der neue Name auf der Website den alten."""
+    if _device_id_cache:
+        return _device_id_cache[0]
+    from services.settings import app_settings
+    settings = app_settings()
+    value = str(settings.value("web_device_id", "", type=str)).strip()
+    if not value:
+        import uuid
+        value = uuid.uuid4().hex[:16]
+        settings.setValue("web_device_id", value)
+    _device_id_cache.append(value)
+    return value
+
+
+def device_name() -> str:
+    """Name dieses Computers für die Website (Einstellungen → Remote); ohne Eintrag der Rechnername."""
+    from services.settings import app_settings
+    name = str(app_settings().value(KEY_DEVICE_NAME, "", type=str)).strip()
+    if not name:
+        import socket
+        name = socket.gethostname().split(".")[0]
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch in " ._-")[:40].strip()
+    return cleaned or "Computer"
 
 
 class RemoteApi(ServerApi):
-    """Wie ``ServerApi``, nur mit Fehlermeldungen, die zu ``remote.php`` passen (statt ``sync.php``)."""
+    """Wie ``ServerApi``, nur mit Fehlermeldungen, die zu ``remote.php`` passen (statt ``sync.php``).
+
+    ``device``: Name dieses Computers; wird bei jeder Anfrage mitgeschickt, damit die Website Befehle und Bilder dem richtigen
+    Computer zuordnet."""
+
+    def __init__(self, url: str, token: str, timeout: float = 30, device: str = ""):
+        super().__init__(url, token, timeout)
+        self.device = device
+
+    def call(self, action: str, **params) -> dict:
+        if self.device:
+            params.setdefault("dev", self.device)
+            params.setdefault("did", device_id())
+        return super().call(action, **params)
 
     @staticmethod
     def _http_message(exc: urllib.error.HTTPError) -> str:
         if exc.code == 401:
             return "Token falsch – bitte in den Einstellungen und in remote.php prüfen"
+        if exc.code == 409:
+            return "Die Website hat eine andere Dateigröße erwartet – der Upload wird neu begonnen"
         if exc.code in (404, 405):
             return "Adresse falsch (remote.php nicht gefunden)"
         detail = ""
@@ -75,19 +138,21 @@ class RelayClient:
     ``upload(filename, data)``. ``on_status(text)`` wird bei jeder Änderung des Zustands der Verbindung aufgerufen
     (aus einem Hintergrund-Thread)."""
 
-    def __init__(self, url: str, token: str, backend, on_status=None, poll_api=None, send_api=None):
+    def __init__(self, url: str, token: str, backend, on_status=None, poll_api=None, send_api=None, device: str = ""):
         self.url = normalize_url(url)
         self.token = (token or "").strip()
+        self.device = device
         self.backend = backend
         self._on_status = on_status or (lambda text: None)
-        self._poll_api = poll_api or RemoteApi(self.url, self.token, POLL_TIMEOUT)
-        self._send_api = send_api or RemoteApi(self.url, self.token, SEND_TIMEOUT)
+        self._poll_api = poll_api or RemoteApi(self.url, self.token, POLL_TIMEOUT, device)
+        self._send_api = send_api or RemoteApi(self.url, self.token, SEND_TIMEOUT, device)
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._threads = []
         self._pool = None
         self._status = ""
         self._connected = False
+        self._inbox_busy = False
         self._lock = threading.Lock()
 
     @property
@@ -136,7 +201,7 @@ class RelayClient:
 
     def _say_goodbye(self) -> None:
         try:
-            RemoteApi(self.url, self.token, 3).call("bye")
+            RemoteApi(self.url, self.token, 3, self.device).call("bye")
         except SyncError:
             pass
 
@@ -172,6 +237,9 @@ class RelayClient:
                     raise SyncError("Programm und remote.php passen nicht zusammen – bitte remote.php neu hochladen")
                 failures = 0
                 self._set_connected(True)
+                if reply.get("inbox") and not self._inbox_busy and self._pool is not None:
+                    self._inbox_busy = True
+                    self._pool.submit(self._drain_inbox)
                 for job in reply.get("jobs") or []:
                     pool = self._pool
                     if pool is not None and isinstance(job, dict):
@@ -189,6 +257,33 @@ class RelayClient:
                 log.exception("Website-Steuerung: unerwarteter Fehler beim Abholen")
                 if self._stop.wait(5):
                     return
+
+    # ------------------------------------------------------------------
+    # Vorgemerkte Bilder abholen (von zu Hause hochgeladen, während das Programm nicht lief)
+    # ------------------------------------------------------------------
+    def _drain_inbox(self) -> None:
+        try:
+            api = RemoteApi(self.url, self.token, INBOX_TIMEOUT, self.device)
+            for _ in range(INBOX_BATCH):
+                if self._stop.is_set():
+                    return
+                item = api.call("inbox_get").get("item")
+                if not isinstance(item, dict):
+                    return
+                name = str(item.get("name", ""))
+                try:
+                    data = base64.b64decode(item.get("body") or "", validate=True)
+                    if data and name.lower().endswith(UPLOAD_EXTENSIONS):
+                        self.backend.upload(name, data)
+                except Exception:
+                    log.exception("Website-Steuerung: vorgemerktes Bild %s konnte nicht übernommen werden", name)
+                api.call("inbox_done", id=item.get("id"))          # auch bei Fehlern: nicht endlos wiederholen
+        except SyncError as exc:
+            log.debug("Website-Steuerung: Bilder-Abholung gestoppt (%s)", exc)
+        except Exception:
+            log.exception("Website-Steuerung: Bilder-Abholung fehlgeschlagen")
+        finally:
+            self._inbox_busy = False
 
     # ------------------------------------------------------------------
     # Zustand senden

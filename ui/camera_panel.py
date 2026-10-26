@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from services import atem
 from services.settings import app_settings
 from ui import theme as t
+from ui import widgets as w
 from ui.tooltip import hide_tip, show_tip
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class CameraSlot(QFrame):
                 border: {SLOT_BORDER}px solid {t.BORDER};
                 border-radius: {SLOT_RADIUS}px;
             }}
+            QFrame#CamSlot[idle="true"] {{ background: {t.SURFACE_LOW}; }}
             QFrame#CamSlot[hover="true"] {{ border-color: {t.ACCENT_BORDER}; }}
             QFrame#CamSlot:focus {{ border-color: {t.ACCENT}; }}
             QFrame#CamSlot[fullscreen="true"] {{ border: {SLOT_BORDER}px dashed {t.ACCENT_BORDER}; }}
@@ -72,8 +74,13 @@ class CameraSlot(QFrame):
         self.video.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._layout.addWidget(self.video, 1)
 
+        self.placeholder_icon = QLabel()
+        self.placeholder_icon.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+        self.placeholder_icon.setPixmap(w.themed_icon(w.ICON_CAMERA, t.TEXT_MUTED, 28).pixmap(28, 28))
+        self._layout.addWidget(self.placeholder_icon, 1)
+
         self.placeholder = QLabel()
-        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self._layout.addWidget(self.placeholder, 1)
 
         self.set_state("empty")
@@ -85,6 +92,8 @@ class CameraSlot(QFrame):
         if state != "fullscreen":
             self.video.setVisible(state == "live")
         self.placeholder.setVisible(state != "live")
+        self.placeholder_icon.setVisible(state in ("empty", "missing"))
+        self.setProperty("idle", state in ("empty", "missing"))
         self.placeholder.setText(self.PLACEHOLDERS.get(state, ""))
         self.setProperty("fullscreen", state == "fullscreen")
         self._repolish()
@@ -194,10 +203,19 @@ class CameraPanel(QWidget):
         self._hover_timer.timeout.connect(self._poll_hover)
         self._hover_timer.start()
 
+    _slot_height = None     # feste Höhe je Kamerafeld (von der Seitenleiste gesetzt), sonst 16:9 nach Breite
+
+    def set_slot_height(self, height: int) -> None:
+        """Feste Höhe je Kamerafeld; das Panel ist dann genau so hoch wie alle Felder samt Abständen."""
+        self._slot_height = height
+        self.setFixedHeight(self.SLOT_COUNT * height + (self.SLOT_COUNT - 1) * self.SLOT_GAP)
+        for slot in self.slots:
+            slot.setFixedHeight(height)
+
     def resizeEvent(self, event):
-        """Jedes Kamerabild bekommt das Seitenverhältnis 16:9 passend zur Breite des Panels."""
+        """Jedes Kamerabild bekommt das Seitenverhältnis 16:9 passend zur Breite des Panels (außer bei fester Höhe)."""
         super().resizeEvent(event)
-        height = round(self.width() * ASPECT_H / ASPECT_W)
+        height = self._slot_height or round(self.width() * ASPECT_H / ASPECT_W)
         for slot in self.slots:
             if slot.height() != height:
                 slot.setFixedHeight(height)
@@ -209,6 +227,13 @@ class CameraPanel(QWidget):
         if not self.isVisible():
             return None
         pos = QCursor.pos()
+        # liegt ein anderes Fenster (Einstellungen, Meldung …) über der Stelle, gehört der Hover nicht uns
+        active = QApplication.activeWindow()
+        if active is None or active is not self.window():       # App im Hintergrund oder anderes Fenster aktiv: kein Hover
+            return None
+        top = QApplication.widgetAt(pos)
+        if top is not None and top.window() is not self.window():
+            return None
         for slot in self.slots:
             if slot.isVisible() and slot.rect().contains(slot.mapFromGlobal(pos)):
                 return slot

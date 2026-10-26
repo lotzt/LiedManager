@@ -131,6 +131,12 @@ ICON_GEAR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
   <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
 </svg>"""
 
+ICON_BELL = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+  stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"></path>
+  <path d="M10 20.5a2 2 0 0 0 4 0"></path>
+</svg>"""
+
 ICON_SEARCH = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
   stroke="{color}" stroke-width="1.8" stroke-linecap="round">
   <circle cx="11" cy="11" r="7"></circle>
@@ -235,9 +241,6 @@ class ElidingLabel(ClickableLabel):
     def _refresh_tooltip(self):
         parts = [p for p in (self._full_text, self._hint) if p]
         self.setToolTip("\n".join(parts))
-
-    def fullText(self) -> str:
-        return self._full_text
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

@@ -6,6 +6,7 @@ automatisch neu aufgebaut. Die Medien (Audio/Bilder) werden erst beim Auswählen
 """
 import logging
 import os
+import time
 import re
 import sqlite3
 from collections import namedtuple
@@ -23,6 +24,8 @@ _LEADING_INT = re.compile(r"^\s*[+-]?\d+")
 _NON_WORD = re.compile(r"[^\w\s]")
 
 FUZZY_CUTOFF = 0.8
+FUZZY_MAX_SECONDS = 2.0       # unscharfe Suche gibt nach so langer Zeit mit dem auf, was sie bis dahin gefunden hat
+RELOAD_MIN_INTERVAL = 3.0     # frühestens alle 3 s die Texte aller Lieder neu aus der Datenbank lesen
 
 
 def normalize(text) -> str:
@@ -66,6 +69,15 @@ class _Song:
         return self._lines
 
 
+def _tolerant_text(raw: bytes):
+    """Text als str lesen; Bytes, die kein gültiges UTF-8 sind (Bild/Audio im Text-Typ gespeichert), bleiben unverändert.
+    Ohne das bricht SQLite mit „Could not decode to UTF-8“ ab."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return bytes(raw)
+
+
 class DatabaseManager:
     def __init__(self, db_name: str = None):
         self.db_name = db_name or resolve_db_path()
@@ -73,6 +85,8 @@ class DatabaseManager:
         self._songs = None          # Liste[_Song] in Datenbank-Reihenfolge
         self._by_number = {}        # lower(nummer ohne Leerzeichen) -> _Song (erster Treffer)
         self._data_version = None
+        self._loaded_at = 0.0
+        self._load_seconds = 0.0
         self._connect()
 
     # ------------------------------------------------------------------
@@ -84,6 +98,7 @@ class DatabaseManager:
             return
         try:
             self._conn = sqlite3.connect(self.db_name)
+            self._conn.text_factory = _tolerant_text
         except sqlite3.Error as exc:
             log.error("Datenbank konnte nicht geöffnet werden: %s", exc)
 
@@ -114,6 +129,10 @@ class DatabaseManager:
         version = self._current_data_version()
         if self._songs is not None and version == self._data_version:
             return True
+        if (self._songs is not None and self._load_seconds > 0.3
+                and time.monotonic() - self._loaded_at < RELOAD_MIN_INTERVAL):
+            return True                 # Abgleich schreibt gerade laufend: nicht bei jeder Suche alle Texte neu laden
+        started = time.monotonic()
         try:
             rows = self._conn.execute(
                 "SELECT rowid, nummer, alias, titel, lyrics FROM Data "
@@ -128,12 +147,20 @@ class DatabaseManager:
         for song in self._songs:
             self._by_number.setdefault(song.number_key, song)
         self._data_version = version
+        self._loaded_at = time.monotonic()
+        self._load_seconds = self._loaded_at - started      # nur bei großen Datenbanken (langsames Laden) wird gedrosselt
         log.info("%d Lieder geladen.", len(self._songs))
         return True
 
     # ------------------------------------------------------------------
     # Suche
     # ------------------------------------------------------------------
+    def all_songs(self):
+        """Alle Lieder als ``SongSummary``-Liste in Datenbank-Reihenfolge (leer, wenn die Datenbank fehlt)."""
+        if not self._ensure_cache():
+            return []
+        return [song.summary for song in self._songs]
+
     def search_songs(self, raw_query: str):
         """Nummer ('1', 'p1', 'p001') -> Titel/Text -> unscharfe Passagensuche. Liefert ``SongSummary``-Liste."""
         query = (raw_query or "").strip().lower()
@@ -187,9 +214,13 @@ class DatabaseManager:
                     and matcher.ratio() >= FUZZY_CUTOFF)
 
         results = []
+        deadline = time.monotonic() + FUZZY_MAX_SECONDS
         for song in self._songs:
             if song.has_alias:
                 continue
+            if time.monotonic() > deadline:
+                log.info("Unscharfe Suche abgebrochen (Zeitlimit) – %d Treffer bis dahin.", len(results))
+                break
             for words in song.lines:
                 if len(words) <= n:
                     hit = similar(" ".join(words))
@@ -206,7 +237,8 @@ class DatabaseManager:
     _FULL_COLUMNS = "rowid, nummer, alias, titel, lyrics, audio1, audio2, bild1, bild2, bild3, bild4"
 
     def get_song_full_data(self, rowid):
-        """Lädt Text + Medien eines Liedes. Defekte Mediendaten werden automatisch bereinigt."""
+        """Lädt Text + Medien eines Liedes. Lässt sich ein Medium nicht lesen, wird das Lied ohne Medien geladen –
+        die Datenbank wird dabei nie verändert (früher wurden die Medien des Liedes gelöscht)."""
         if self._conn is None:
             return None
         try:
@@ -214,17 +246,12 @@ class DatabaseManager:
                 f"SELECT {self._FULL_COLUMNS} FROM Data WHERE rowid = ?", (rowid,)
             ).fetchone()
         except sqlite3.Error as exc:
-            log.warning("Korrupte Mediendaten bei ID %s (%s) – bereinige Datensatz.", rowid, exc)
+            log.warning("Mediendaten bei ID %s nicht lesbar (%s) – Lied wird ohne Medien geladen.", rowid, exc)
         try:
-            self._conn.execute(
-                "UPDATE Data SET bild1 = NULL, bild2 = NULL, bild3 = NULL, bild4 = NULL, "
-                "audio1 = NULL, audio2 = NULL WHERE rowid = ?", (rowid,)
-            )
-            self._conn.commit()
             return self._conn.execute(
                 "SELECT rowid, nummer, alias, titel, lyrics, NULL, NULL, NULL, NULL, NULL, NULL "
                 "FROM Data WHERE rowid = ?", (rowid,)
             ).fetchone()
         except sqlite3.Error as exc:
-            log.error("Bereinigung von ID %s fehlgeschlagen: %s", rowid, exc)
+            log.error("Lied ID %s konnte nicht gelesen werden: %s", rowid, exc)
             return None

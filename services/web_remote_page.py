@@ -26,6 +26,7 @@ ICONS = {'SEARCH': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
     'CLOSE': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     'UP': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>',
     'DOWN': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
+    'BELL': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>',
     'CAMERA': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5a2 2 0 0 1 2-2h2.4l1.4-2h6.4l1.4 2H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.8" r="3.4"/></svg>',
     'IMAGES': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.7"/><path d="M21 16.5l-5-5-8.5 8"/></svg>',
     'PREV': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>',
@@ -60,6 +61,7 @@ HTML = """<!doctype html>
         <input id="q" type="search" placeholder="Suche" autocomplete="off" aria-label="Lied suchen"
                title="Suche nach Liednummer (z. B. 12 oder p012), Titel oder Textstelle">
       </div>
+      <button id="gongBtn" class="round" title="Gong abspielen" aria-label="Gong">__ICON_BELL__</button>
       <button id="moreBtn" class="round" title="Mehr: Datenbank-Abgleich, Version, Abmelden" aria-label="Mehr">__ICON_GEAR__</button>
     </div>
     <nav id="tabs" class="tabs" aria-label="Bereiche">
@@ -70,6 +72,7 @@ HTML = """<!doctype html>
     </nav>
   </header>
   <div class="status">
+    <select id="deviceSel" class="chip" title="Welcher Computer bedient wird" aria-label="Computer" hidden></select>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
@@ -120,7 +123,7 @@ HTML = """<!doctype html>
         <button id="pauseBtn" class="round" title="Pausentimer starten" aria-label="Pausentimer starten oder beenden"><span class="i-play">__ICON_PLAY__</span><span class="i-pause">__ICON_STOP__</span></button>
         <button id="pauseChevron" class="chev" type="button" title="Ansagen ein- oder ausklappen" aria-label="Ansagen ein- oder ausklappen">__ICON_DOWN__</button>
       </div>
-      <textarea id="lines" rows="10" cols="47" wrap="off" spellcheck="false" hidden placeholder="Ansagen" aria-label="Ansagen"
+      <textarea id="lines" rows="11" cols="50" wrap="off" spellcheck="false" hidden placeholder="Ansagen" aria-label="Ansagen"
                 title="Ansagen für die Pausenfolie – eine Zeile pro Ansage"></textarea>
     </section>
   </section>
@@ -139,6 +142,12 @@ HTML = """<!doctype html>
         <button class="pill" data-atem="default" title="Auf den Standardkanal schalten">Standard</button>
       </div>
     </div>
+    <div id="mixerCard" class="card" hidden>
+      <div class="caption">Mischpult (X AIR) <span id="mixerState" class="chip" title="Verbindung zum Mischpult">…</span></div>
+      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Mischpult → „X AIR“ (IP-Adresse eintragen).</p>
+      <div id="mixerList"></div>
+      <button id="mixerMuteAll" type="button" class="pill" title="Alle acht Kanäle stummschalten">Alles stumm</button>
+    </div>
   </section>
 
   <section id="tab-images" class="tabpage" hidden>
@@ -155,16 +164,25 @@ HTML = """<!doctype html>
       <div class="caption">Abgelegte Bilder – antippen zeigt auf dem Beamer</div>
       <div id="thumbs" class="thumbs"></div>
       <p id="noImages" class="muted">Noch keine Bilder. Lade welche vom Handy hoch.</p>
+      <p id="queueNote" class="muted" hidden></p>
       <div class="row">
         <label class="pill filebtn" title="Bilder von diesem Gerät hinzufügen">Bilder hochladen
           <input id="upload" type="file" accept="image/*" multiple hidden>
         </label>
         <button id="clearBtn" class="pill" title="Alle abgelegten Bilder entfernen">Alle entfernen</button>
       </div>
+      <div class="row" id="queueRow" hidden>
+        <button id="queueClearBtn" class="pill" title="Vorgemerkte Bilder auf dem Server verwerfen">Vorgemerkte verwerfen</button>
+      </div>
     </div>
   </section>
 
   <section id="tab-more" class="tabpage" hidden>
+    <div id="reportsCard" class="card" hidden>
+      <div class="caption">Gemeldete Probleme</div>
+      <div id="reportsList"></div>
+      <div class="row"><button id="reportsClearBtn" class="pill" title="Alle gemeldeten Probleme löschen">Liste leeren</button></div>
+    </div>
     <div class="card">
       <div class="caption">Datenbank-Abgleich</div>
       <p id="syncStatus" class="muted">–</p>
@@ -232,9 +250,9 @@ input[type=search] { -webkit-appearance: none; appearance: none; padding-left: 4
 input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; }
 input.small { height: 32px; padding: 0 10px; background: var(--bg); }
 textarea {
-  /* genau 47 Zeichen breit und 10 Zeilen hoch (Schrift mit fester Breite), ohne Bildlauf */
-  width: calc(47ch + 26px); height: 218px; padding: 8px 12px; resize: none; overflow: hidden; white-space: pre; overflow-wrap: normal;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 12px; line-height: 20px;
+  /* genau 50 Zeichen breit und 11 Zeilen hoch (Schrift mit fester Breite), ohne Bildlauf */
+  width: calc(50ch + 26px); height: 238px; padding: 8px 12px; resize: none; overflow: hidden; white-space: pre; overflow-wrap: normal;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 11px; line-height: 20px;
   color: var(--text-2); letter-spacing: 0;
 }
 input[type=time] { color-scheme: dark; }
@@ -307,6 +325,7 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
   font-size: var(--fs-small); color: var(--text-2); border: 1px solid var(--border); border-radius: 14px;
   padding: 3px 10px; background: var(--surface);
 }
+select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
@@ -345,6 +364,14 @@ input[type=range]::-webkit-slider-thumb {
   background: var(--accent-light); box-shadow: 0 0 6px rgba(217,164,106,.55);
 }
 input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 6px; border: 0; background: var(--accent-light); }
+
+#mixerMuteAll { margin-top: 14px; width: 100%; justify-content: center; border-color: #C0504D; color: #F0B8B6; }
+#reportsList details { margin: 8px 0; }
+#reportsList pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.mixrow { display: grid; grid-template-columns: 44% 1fr 52px; gap: 10px; align-items: center; margin: 10px 0 0; }
+.mixrow .pill { justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mixrow .pill.muted { border-color: #C0504D; color: #F0B8B6; background: rgba(192,80,77,.16); }
+.mixdb { text-align: right; font-size: var(--fs-small); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Aufnahme */
 .recmid { display: flex; gap: 8px; align-items: center; }
@@ -415,6 +442,9 @@ input.timeedit { width: 84px; flex: none; text-align: center; padding: 0 8px; fo
 JS = r"""(function () {
   'use strict';
   var TOKEN_KEY = 'lm_token';
+  var DEVICE_KEY = 'lm_device';
+  var device = '';
+  try { device = localStorage.getItem(DEVICE_KEY) || ''; } catch (e) {}
   var RELAY = '__RELAY__';      // leer = Programm direkt; sonst Name des PHP-Skripts auf der Website
   var token = '';
   try { token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { token = ''; }
@@ -463,6 +493,7 @@ JS = r"""(function () {
     if (token) {
       if (RELAY) { headers['X-LM-Token'] = token; } else { headers['Authorization'] = 'Bearer ' + token; }
     }
+    if (device) { headers['X-LM-Device'] = device; }
     var init = { method: method, headers: headers, cache: 'no-store' };
     if (raw) {
       init.body = raw;
@@ -509,9 +540,36 @@ JS = r"""(function () {
     $('pin').value = '';
     $('pin').focus();
   }
+  var deviceSig = '';
+  function refreshDevices() {
+    return request('GET', '/api/devices').then(function (r) {
+      var list = r.devices || [];
+      var names = list.map(function (d) { return d.name; });
+      if (!device || names.indexOf(device) < 0) { device = r.current || names[0] || ''; }
+      var sel = $('deviceSel');
+      var sig = device + '|' + list.map(function (d) { return d.name + (d.online ? '+' : '-'); }).join(',');
+      if (sig === deviceSig) { return; }
+      deviceSig = sig;
+      sel.textContent = '';
+      list.forEach(function (d) {
+        var opt = el('option', '', d.name + (d.online ? '' : ' (aus)'));
+        opt.value = d.name;
+        if (d.name === device) { opt.selected = true; }
+        sel.appendChild(opt);
+      });
+      sel.hidden = list.length < 2;
+    }).catch(function () {});
+  }
+  on('deviceSel', 'change', function () {
+    device = $('deviceSel').value;
+    try { localStorage.setItem(DEVICE_KEY, device); } catch (e) {}
+    location.reload();
+  });
   function showApp() {
     $('login').hidden = true;
     $('app').hidden = false;
+    refreshDevices();
+    setInterval(function () { if (!document.hidden) { refreshDevices(); } }, 15000);   // neue oder ausgeschaltete Computer nachführen
     refresh();
     if (!pollTimer) { pollTimer = setInterval(function () { if (!document.hidden) { refresh(); } }, 1000); }
   }
@@ -529,15 +587,50 @@ JS = r"""(function () {
   }
 
   /* ---------------- Zustand holen und anzeigen ---------------- */
+  var reportsLoaded = false;
   function refresh() {
     return request('GET', '/api/state').then(function (s) {
       state = s;
       setConn(true);
+      showQueue(0);
       render(s);
+      if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); }
     });
+  }
+  /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
+  function showQueue(n) {
+    $('queueNote').hidden = !n;
+    $('queueRow').hidden = !n;
+    if (n) {
+      $('queueNote').textContent = n + (n === 1 ? ' Bild ist' : ' Bilder sind') +
+        ' vorgemerkt und werden beim nächsten Start des Programms übernommen.';
+    }
+  }
+  function renderReports(list) {
+    var box = $('reportsList');
+    $('reportsCard').hidden = !(list && list.length);
+    box.textContent = '';
+    (list || []).forEach(function (r) {
+      var item = el('details', '');
+      var head = el('summary', '', new Date(r.created * 1000).toLocaleString('de-DE') + ' · ' + r.title +
+        (Number(r.n) > 1 ? ' (' + r.n + '×)' : ''));
+      item.appendChild(head);
+      item.appendChild(el('pre', 'muted', 'Version ' + r.version + ' · ' + r.system + '\n' + (r.detail || '')));
+      box.appendChild(item);
+    });
+  }
+  function refreshReports() {
+    return request('GET', '/api/reports').then(function (r) { renderReports(r.reports); }).catch(function () {});
+  }
+  $('reportsClearBtn').addEventListener('click', function () {
+    request('POST', '/api/reports_clear', {}).then(function () { renderReports([]); })
+      .catch(function (err) { toast(err.message, true); });
+  });
+  function refreshQueue() {
+    return request('GET', '/api/inbox').then(function (r) { showQueue(r.pending || 0); }).catch(function () {});
   }
   function setConn(ok) {
     var chip = $('conn');
@@ -666,10 +759,104 @@ JS = r"""(function () {
     }
     $('camCloseBtn').disabled = !s.cameras.some(function (c) { return c.fullscreen; });
     $('atemCard').hidden = !s.atem.enabled;
+    renderMixer(s.mixer);
+    if (s.atem.channels) {
+      var names = { presentation: 'Präsentation', camera: 'Kamera', default: 'Standard' };
+      Array.prototype.forEach.call(document.querySelectorAll('button[data-atem]'), function (b) {
+        var no = s.atem.channels[b.dataset.atem];
+        b.textContent = names[b.dataset.atem] + (no ? ' (Eingang ' + no + ')' : '');
+      });
+    }
   }
 
+  /* ---------------- Mischpult (X AIR) ---------------- */
+  var mixDrag = {};                       // Kanal -> Zeitpunkt, bis zu dem der Regler nicht überschrieben wird
+  var mixMute = {};
+  function faderDb(level) {
+    if (level <= 0) { return '−∞'; }
+    var db = level >= 0.5 ? level * 40 - 30 : level >= 0.25 ? level * 80 - 50 : level >= 0.0625 ? level * 160 - 70 : level * 480 - 90;
+    return (db > 0 ? '+' : db < 0 ? '−' : '') + Math.abs(db).toFixed(1);
+  }
+  function renderMixer(mx) {
+    var card = $('mixerCard');
+    card.hidden = !mx;
+    if (card.hidden) { return; }
+    var chip = $('mixerState');
+    var off = !mx.enabled;
+    $('mixerOff').hidden = !off;
+    $('mixerList').hidden = off;
+    $('mixerMuteAll').hidden = off;
+    chip.textContent = off ? 'aus' : mx.connected ? 'verbunden' : 'nicht erreichbar';
+    if (off) { return; }
+    var list = $('mixerList');
+    var channels = mx.channels || [];
+    if (list.children.length !== channels.length) {
+      list.textContent = '';
+      channels.forEach(function (ch) {
+        var row = el('div', 'mixrow');
+        row.dataset.ch = String(ch.n);
+        var mute = el('button', 'pill', '');
+        mute.type = 'button';
+        mute.dataset.mute = String(ch.n);
+        mute.title = 'Kanal stummschalten / wieder einschalten';
+        var fader = el('input', '');
+        fader.type = 'range'; fader.min = '0'; fader.max = '1'; fader.step = '0.005'; fader.value = '0';
+        fader.dataset.fader = String(ch.n);
+        fader.title = 'Lauter / leiser';
+        fader.setAttribute('aria-label', 'Lautstärke Kanal ' + ch.n);
+        var db = el('span', 'mixdb', '');
+        row.appendChild(mute); row.appendChild(fader); row.appendChild(db);
+        list.appendChild(row);
+      });
+    }
+    channels.forEach(function (ch, i) {
+      var row = list.children[i];
+      var mute = row.children[0], fader = row.children[1], db = row.children[2];
+      mixMute[ch.n] = !!ch.mute;
+      mute.textContent = ch.n + (ch.name ? ' ' + ch.name : '');
+      mute.classList.toggle('muted', !!ch.mute);
+      if (ch.level !== null && ch.level !== undefined && !(mixDrag[ch.n] > Date.now())) {
+        fader.value = String(ch.level);
+        fader.style.setProperty('--p', (ch.level * 100) + '%');
+        db.textContent = faderDb(ch.level);
+      }
+    });
+  }
+  function bindMixer() {
+    var list = $('mixerList');
+    list.addEventListener('input', function (e) {
+      var f = e.target.closest('input[data-fader]');
+      if (!f) { return; }
+      mixDrag[f.dataset.fader] = Date.now() + 2500;
+      f.style.setProperty('--p', (Number(f.value) * 100) + '%');
+      f.parentNode.children[2].textContent = faderDb(Number(f.value));
+    });
+    list.addEventListener('change', function (e) {
+      var f = e.target.closest('input[data-fader]');
+      if (!f) { return; }
+      mixDrag[f.dataset.fader] = Date.now() + 1500;
+      actQuiet('mixer_level', { channel: Number(f.dataset.fader), level: Number(f.value) });
+    });
+    list.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-mute]');
+      if (!b) { return; }
+      var n = Number(b.dataset.mute);
+      var next = !mixMute[n];
+      mixMute[n] = next;
+      b.classList.toggle('muted', next);
+      actQuiet('mixer_mute', { channel: n, mute: next });
+    });
+  }
+  bindMixer();
+  $('mixerMuteAll').addEventListener('click', function () {
+    Array.prototype.forEach.call(document.querySelectorAll('#mixerList button[data-mute]'), function (b) {
+      mixMute[Number(b.dataset.mute)] = true; b.classList.add('muted');
+    });
+    actQuiet('mixer_mute_all', {});
+  });
+
   var pauseOpen = false;
-  var maxLines = 10, maxChars = 47;
+  var maxLines = 11, maxChars = 50;
   function clampLines() {
     var box = $('lines');
     var lines = box.value.split('\n').slice(0, maxLines).map(function (l) { return l.slice(0, maxChars); });
@@ -766,6 +953,7 @@ JS = r"""(function () {
       $('q').value = '';
     }).catch(function () {});
   });
+  on('gongBtn', 'click', function () { actQuiet('gong'); });
   on('showBtn', 'click', function () { actQuiet('show_song'); });
   on('closeBeamerBtn', 'click', function () { actQuiet('beamer_close'); });
   on('a1', 'click', function () { actQuiet('audio_play', { slot: 0 }); });
@@ -803,18 +991,25 @@ JS = r"""(function () {
   on('clearBtn', 'click', function () {
     if (window.confirm('Alle abgelegten Bilder entfernen?')) { actQuiet('images_clear'); }
   });
+  on('queueClearBtn', 'click', function () {
+    if (window.confirm('Vorgemerkte Bilder auf dem Server verwerfen?')) {
+      request('POST', '/api/inbox_clear', {}).then(function () { showQueue(0); }).catch(function (err) { toast(err.message, true); });
+    }
+  });
   on('upload', 'change', function () {
     var files = Array.prototype.slice.call($('upload').files);
     $('upload').value = '';
-    var done = 0, failed = 0;
+    var done = 0, failed = 0, queued = 0;
     files.reduce(function (chain, file) {
       return chain.then(function () {
         return request('POST', '/api/upload?name=' + encodeURIComponent(file.name), undefined, file).then(function (r) {
+          if (r.queued) { queued += 1; refreshQueue(); }
           done += r.added || 0;
           failed += r.failed || 0;
         }).catch(function (err) { failed += 1; toast(err.message, true); });
       });
     }, Promise.resolve()).then(function () {
+      if (queued) { toast(queued + (queued === 1 ? ' Bild' : ' Bilder') + ' vorgemerkt – kommen beim nächsten Programmstart'); }
       if (done) { toast(done + (done === 1 ? ' Bild' : ' Bilder') + ' hinzugefügt'); }
       refresh();
     });

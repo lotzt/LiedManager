@@ -156,6 +156,9 @@ def safe_name(name: str) -> str:
 
 def download(info: UpdateInfo, dest_dir, progress=None, cancelled=None) -> Path:
     """Lädt den Installer nach ``dest_dir``. ``progress(gelesen, gesamt)``; ``cancelled()`` bricht ab."""
+    if not info.sha256:
+        raise UpdateError("Für diese Version liefert GitHub keine Prüfsumme. Aus Sicherheitsgründen wird sie nicht automatisch "
+                          "installiert – bitte über die Release-Seite herunterladen.")
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     target = dest_dir / safe_name(info.asset_name)

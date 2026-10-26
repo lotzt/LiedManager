@@ -20,6 +20,7 @@ const DB_PASS = 'HIER-DB-PASSWORT';
 
 const FORMAT     = 1;      // Protokollversion (Programm und Server müssen zusammenpassen)
 const LIST_LIMIT = 2000;   // Einträge pro „list“-Antwort
+const PARTS_KEEP = 259200; // Sekunden, nach denen nie fertiggestellte Teile (abgebrochene Uploads) gelöscht werden
 
 @ini_set('memory_limit', '512M');
 @ini_set('display_errors', '0');
@@ -65,6 +66,17 @@ try {
         data    LONGBLOB NULL,
         INDEX idx_seq (seq)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin');
+    // Große Lieder werden in Teilen gespeichert (jedes Teil klein genug für post_max_size und max_allowed_packet)
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_parts (
+        up      VARCHAR(40) NOT NULL,
+        idx     INT NOT NULL,
+        made    BIGINT NOT NULL,
+        data    LONGBLOB NOT NULL,
+        PRIMARY KEY (up, idx)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin');
+    if (!$db->query("SHOW COLUMNS FROM lm_songs LIKE 'parts_uid'")->fetch()) {
+        $db->exec('ALTER TABLE lm_songs ADD COLUMN parts_uid VARCHAR(40) NULL, ADD COLUMN parts_n INT NULL');
+    }
     $db->exec('CREATE TABLE IF NOT EXISTS lm_counter (id TINYINT NOT NULL PRIMARY KEY, v BIGINT NOT NULL)');
     $db->exec('INSERT IGNORE INTO lm_counter (id, v) VALUES (1, 0)');
 
@@ -91,16 +103,45 @@ try {
     }
 
     if ($action === 'get') {
-        $q = $db->prepare('SELECT k, ts, dev, hash, deleted, seq, data FROM lm_songs WHERE k = ?');
+        $q = $db->prepare('SELECT k, ts, dev, hash, deleted, seq, data, parts_uid, parts_n FROM lm_songs WHERE k = ?');
         $q->execute([(string)($in['key'] ?? '')]);
         $row = $q->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
             reply(['row' => null]);
         }
+        if ($row['parts_uid'] !== null) {                  // großes Lied: Teile einzeln über „get_part“ abholen
+            $row['parts'] = (int)$row['parts_n'];
+            $row['uid'] = $row['parts_uid'];
+        }
+        unset($row['parts_uid'], $row['parts_n']);
         $row['ts'] = (int)$row['ts'];
         $row['deleted'] = (int)$row['deleted'];
         $row['seq'] = (int)$row['seq'];
         reply(['row' => $row]);
+    }
+
+    if ($action === 'get_part') {
+        $q = $db->prepare('SELECT data FROM lm_parts WHERE up = ? AND idx = ?');
+        $q->execute([(string)($in['uid'] ?? ''), (int)($in['idx'] ?? 0)]);
+        $part = $q->fetchColumn();
+        if ($part === false) {
+            reply(['error' => 'Teil nicht gefunden.'], 404);
+        }
+        reply(['data' => $part]);
+    }
+
+    if ($action === 'push_part') {
+        $uid = (string)($in['uid'] ?? '');
+        if (!preg_match('/^[0-9a-f]{8,40}$/', $uid)) {
+            reply(['error' => 'Ungültige Angaben.'], 400);
+        }
+        $up = $db->prepare('INSERT INTO lm_parts (up, idx, made, data) VALUES (?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE made = VALUES(made), data = VALUES(data)');
+        $up->execute([$uid, (int)($in['idx'] ?? 0), time(), (string)($in['data'] ?? '')]);
+        $old = $db->prepare('DELETE FROM lm_parts WHERE made < ? AND up NOT IN
+            (SELECT parts_uid FROM lm_songs WHERE parts_uid IS NOT NULL)');
+        $old->execute([time() - PARTS_KEEP]);              // abgebrochene Uploads aufräumen
+        reply(['ok' => true]);
     }
 
     if ($action === 'push') {
@@ -109,6 +150,18 @@ try {
         $dev = (string)($in['dev'] ?? '');
         $deleted = empty($in['deleted']) ? 0 : 1;
         $data = $deleted ? null : (string)($in['data'] ?? '');
+        $uid = null;
+        $nparts = null;
+        if (!$deleted && !empty($in['parts'])) {           // großes Lied: die Teile liegen schon in lm_parts
+            $uid = (string)($in['uid'] ?? '');
+            $nparts = (int)$in['parts'];
+            $have = $db->prepare('SELECT COUNT(*) FROM lm_parts WHERE up = ? AND idx < ?');
+            $have->execute([$uid, $nparts]);
+            if (!preg_match('/^[0-9a-f]{8,40}$/', $uid) || (int)$have->fetchColumn() !== $nparts) {
+                reply(['error' => 'Teile des Liedes fehlen.'], 400);
+            }
+            $data = null;
+        }
         if ($key === '' || strlen($key) > 190 || $ts <= 0 || $dev === '' || strlen($dev) > 32) {
             reply(['error' => 'Ungültige Angaben.'], 400);
         }
@@ -116,7 +169,7 @@ try {
         for ($attempt = 1; ; $attempt++) {
             try {
                 $db->beginTransaction();
-                $q = $db->prepare('SELECT ts, dev FROM lm_songs WHERE k = ? FOR UPDATE');
+                $q = $db->prepare('SELECT ts, dev, parts_uid FROM lm_songs WHERE k = ? FOR UPDATE');
                 $q->execute([$key]);
                 $old = $q->fetch(PDO::FETCH_ASSOC);
                 if ($old && ((int)$old['ts'] > $ts || ((int)$old['ts'] === $ts && strcmp($old['dev'], $dev) >= 0))) {
@@ -125,10 +178,16 @@ try {
                 }
                 $db->exec('UPDATE lm_counter SET v = LAST_INSERT_ID(v + 1) WHERE id = 1');
                 $seq = (int)$db->query('SELECT LAST_INSERT_ID()')->fetchColumn();
-                $up = $db->prepare('INSERT INTO lm_songs (k, ts, dev, hash, deleted, seq, data) VALUES (?, ?, ?, ?, ?, ?, ?)
+                $up = $db->prepare('INSERT INTO lm_songs (k, ts, dev, hash, deleted, seq, data, parts_uid, parts_n)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON DUPLICATE KEY UPDATE ts = VALUES(ts), dev = VALUES(dev), hash = VALUES(hash),
-                        deleted = VALUES(deleted), seq = VALUES(seq), data = VALUES(data)');
-                $up->execute([$key, $ts, $dev, substr((string)($in['hash'] ?? ''), 0, 64), $deleted, $seq, $data]);
+                        deleted = VALUES(deleted), seq = VALUES(seq), data = VALUES(data),
+                        parts_uid = VALUES(parts_uid), parts_n = VALUES(parts_n)');
+                $up->execute([$key, $ts, $dev, substr((string)($in['hash'] ?? ''), 0, 64), $deleted, $seq, $data, $uid, $nparts]);
+                if ($old && $old['parts_uid'] !== null && $old['parts_uid'] !== $uid) {
+                    $gone = $db->prepare('DELETE FROM lm_parts WHERE up = ?');   // Teile der alten Fassung entfernen
+                    $gone->execute([$old['parts_uid']]);
+                }
                 $db->commit();
                 reply(['accepted' => true, 'seq' => $seq]);
             } catch (PDOException $e) {

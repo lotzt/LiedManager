@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Abhängigkeiten
-        run: pip install -r requirements.txt pyinstaller Pillow
+        run: pip install -r requirements.txt -r requirements-ccli.txt pyinstaller Pillow
       - name: Icon und Versionsdatei
         run: python tools/build_assets.py
       - name: Smoke-Test
@@ -106,7 +106,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Abhängigkeiten
-        run: pip install -r requirements.txt pyinstaller Pillow
+        run: pip install -r requirements.txt -r requirements-ccli.txt pyinstaller Pillow
       - name: Icon und Versionsdatei
         run: python tools/build_assets.py
       - name: Smoke-Test (Oberfläche startet, Screenshots)

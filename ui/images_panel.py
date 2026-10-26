@@ -5,25 +5,27 @@
 * ``load_image``       lädt ein Bild verkleinert und nach EXIF-Ausrichtung gedreht (wird auch von der Galerie genutzt).
 """
 import os
+from pathlib import Path
 import re
 
 from PyQt6.QtCore import (
-    QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal,
+    QEvent, QEventLoop, QObject, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QColor, QCursor, QImageIOHandler, QImageReader, QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QMenu, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
+    QMenu, QPushButton, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
+from paths import user_data_dir
 from ui import theme as t
 from ui import widgets as w
 from ui.tooltip import show_tip
 
 MAX_SIDE = 3840          # größere Bilder werden beim Laden auf 4K-Kantenlänge verkleinert
-THUMB_W, THUMB_H = 200, 112
+THUMB_W, THUMB_H = 192, 108   # 16:9; Karte (+ 2 × 6 px) = 204 px = genau die Breite der Seitenleiste (wie die Kamerafelder)
 THUMB_DPR = 2            # Vorschau in doppelter Auflösung (scharf auf Retina-Displays)
 
 ICON_CLOSE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -37,6 +39,17 @@ _suffixes = None
 # ----------------------------------------------------------------------
 # Dateien erkennen und laden
 # ----------------------------------------------------------------------
+def _discard_upload(path: str) -> None:
+    """Hochgeladene Bilder (Ordner web_uploads) werden mit dem Entfernen aus der Ablage auch von der Platte gelöscht."""
+    try:
+        folder = (user_data_dir() / "web_uploads").resolve()
+        target = Path(path).resolve()
+        if folder in target.parents:
+            target.unlink()
+    except OSError:
+        pass
+
+
 def image_suffixes() -> set:
     """Dateiendungen, die Qt auf diesem Rechner lesen kann (jpg, png, gif, bmp, webp, tiff …)."""
     global _suffixes
@@ -224,6 +237,7 @@ class _ThumbList(w.SmoothListWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setUniformItemSizes(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)   # scrollt wird das ganze Feld der Seitenleiste
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMouseTracking(True)
@@ -232,6 +246,14 @@ class _ThumbList(w.SmoothListWidget):
         self.setStyleSheet("QListWidget { background: transparent; border: 0; outline: 0; }")
         self.viewport().setStyleSheet("background: transparent;")
         self.setDragEnabled(False)
+
+    def wheelEvent(self, event):
+        event.ignore()                      # das Mausrad gehört dem äußeren Feld (Kameras + Bilder scrollen zusammen)
+
+    def fit_height(self) -> None:
+        """Die Liste ist so hoch wie alle Bilder – ein eigenes Scrollen gibt es nicht."""
+        row = THUMB_H + 2 * _ThumbDelegate.PAD + _ThumbDelegate.GAP
+        self.setFixedHeight(max(0, self.count() * row))
 
     def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):
         """Qt scrollt sonst bei jedem Klick auf ein angeschnittenes Bild – das passiert nur noch auf Anforderung."""
@@ -325,9 +347,16 @@ class ImagesPanel(QWidget):
         self.title = QLabel("Keine Bilder")
         self.title.setStyleSheet(t.caption_style())
         header.addWidget(self.title, 1)
-        self.clear_btn = w.icon_button(ICON_CLOSE, t.ACCENT_LIGHT, 12, "Alle Bilder entfernen", size=28)
+        header.addStretch(1)                           # hält das ✕ rechts, auch wenn die Anzahl (zugeklappt) ausgeblendet ist
+        self.clear_btn = QPushButton("✕")
+        self.clear_btn.setFixedSize(28, 28)
+        self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.clear_btn.setStyleSheet(t.pill_button_style(radius=14, font_size=13) + "QPushButton { padding: 0; }")
+        self.clear_btn.setToolTip("Alle Bilder entfernen (hochgeladene Dateien werden auch gelöscht)")
         self.clear_btn.clicked.connect(self.clear)
         header.addWidget(self.clear_btn)
+        self._header = header
         layout.addLayout(header)
 
         # Leerer Zustand: gleiche Optik wie ein freier Kamera-Platz
@@ -347,9 +376,16 @@ class ImagesPanel(QWidget):
         self.list.escape_requested.connect(self.escape_requested)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_menu)
-        layout.addWidget(self.list, 1)
+        layout.addWidget(self.list, 1, Qt.AlignmentFlag.AlignTop)   # Liste beginnt immer oben (kein Verrutschen bei Überhöhe)
 
         self._after_change()
+
+    def take_clear_button(self) -> QPushButton:
+        """Gibt das ✕ an die Seitenleiste ab (es steht dort neben der Anzahl). Die eigene Kopfzeile ist danach leer und
+        nimmt keinen Platz mehr ein – das Feld beginnt genau an der Oberkante des Panels."""
+        self._header.removeWidget(self.clear_btn)
+        self.title.setVisible(False)
+        return self.clear_btn
 
     # ------------------------------------------------------------------
     # Zugriff
@@ -372,6 +408,8 @@ class ImagesPanel(QWidget):
             for path in expand_paths(paths):
                 if path in self._paths:
                     continue
+                if added and added % 6 == 0:
+                    QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)   # Fenster friert bei vielen Bildern nicht ein
                 image = load_image(path, max_side=THUMB_W * THUMB_DPR * 2)
                 if image is None:
                     failed.append(os.path.basename(path))
@@ -398,12 +436,15 @@ class ImagesPanel(QWidget):
         if row < 0:
             return
         self.list.takeItem(row)
+        _discard_upload(self._paths[row])
         del self._paths[row]
         if self.list.count():
             self.list.set_current_row_visible(min(row, self.list.count() - 1))
         self._after_change()
 
     def clear(self) -> None:
+        for path in self._paths:
+            _discard_upload(path)
         self.list.clear()
         self._paths.clear()
         self._after_change()
@@ -412,8 +453,9 @@ class ImagesPanel(QWidget):
         count = len(self._paths)
         self.title.setText((f"{count} Bild" if count == 1 else f"{count} Bilder") if count else "Keine Bilder")
         self.empty_label.setVisible(count == 0)
+        self.list.fit_height()
         self.list.setVisible(count > 0)
-        self.clear_btn.setEnabled(count > 0)
+        self.clear_btn.setVisible(count > 0)
         self.images_changed.emit()
 
     # ------------------------------------------------------------------

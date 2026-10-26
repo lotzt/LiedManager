@@ -29,6 +29,11 @@ if importlib.util.find_spec("certifi"):
 if importlib.util.find_spec("pptx"):
     datas += collect_data_files("pptx")
     hiddenimports += collect_submodules("pptx")
+if importlib.util.find_spec("keyring"):
+    hiddenimports += collect_submodules("keyring")   # Schlüsselbund (macOS/Windows) für Token und Passwörter
+if importlib.util.find_spec("playwright"):          # „Bei CCLI melden“: nur dabei, wenn im Build-Python installiert
+    datas += collect_data_files("playwright")        # enthält den Playwright-Treiber; genutzt wird der installierte Chrome/Edge
+    hiddenimports += collect_submodules("playwright")
 for module in ("PyATEMMax", "ATEM"):
     if importlib.util.find_spec(module):
         hiddenimports += collect_submodules(module)

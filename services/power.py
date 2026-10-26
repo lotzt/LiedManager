@@ -132,7 +132,8 @@ def exempt_from_app_nap(bundle_id: str) -> bool:
         log.warning("App Nap für %s konnte nicht abgeschaltet werden: %s", bundle_id, exc)
         return False
     if result.returncode != 0:
-        log.warning("App Nap für %s konnte nicht abgeschaltet werden: %s", bundle_id,
+        # PowerPoint liegt in einem geschützten Ordner (Sandbox) – das Schreiben kann scheitern. Der Pausentimer geht auch so.
+        log.info("App Nap für %s konnte nicht abgeschaltet werden: %s", bundle_id,
                     result.stderr.decode("utf-8", "replace").strip())
         return False
     return True

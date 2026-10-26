@@ -1,0 +1,49 @@
+name: Tests
+
+# Läuft bei jedem Push und jeder Pull-Request auf macOS und Windows (die Systeme, auf denen LiedManager benutzt wird)
+# und prüft, dass die Oberfläche startet und die wichtigsten Abläufe funktionieren (tools/smoke_test.py, ohne Bildschirm).
+# Von Hand startbar unter "Actions" -> "Tests" -> "Run workflow".
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Abhängigkeiten
+        run: pip install -r requirements.txt ruff
+      - name: Syntax und Namen prüfen (ruff)
+        run: ruff check --select F,E9 .
+      - name: Smoke-Test
+        shell: bash
+        timeout-minutes: 10
+        env:
+          PYTHONUTF8: "1"
+          PYTHONUNBUFFERED: "1"
+          QT_QPA_PLATFORM: offscreen
+          SMOKE_TEST_TIMEOUT: "400"
+        run: python -X faulthandler tools/smoke_test.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots-${{ matrix.os }}
+          path: build/screenshots
+          if-no-files-found: ignore
+      - name: Remote-Seite aktuell?
+        shell: bash
+        run: python tools/build_remote_site.py --check

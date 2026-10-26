@@ -44,6 +44,8 @@ class RoundedToolTip(QWidget):
         self._timer.timeout.connect(self.hide)
 
     def show_text(self, text: str, global_pos: QPoint) -> None:
+        if QApplication.applicationState() != Qt.ApplicationState.ApplicationActive:
+            return                       # Programm im Hintergrund (anderes Fenster davor): keine Erklärung, kein Nach-vorn-Holen
         label = self._label
         label.setWordWrap(False)
         label.setText(text)
@@ -65,8 +67,7 @@ class RoundedToolTip(QWidget):
             y = global_pos.y() - self.height() - 8
         self.move(max(area.left(), x), max(area.top(), y))
 
-        self.show()
-        self.raise_()
+        self.show()                      # kein raise_(): unter macOS holt das das ganze Programm nach vorn
         self._timer.start()
 
     def hideEvent(self, event):
