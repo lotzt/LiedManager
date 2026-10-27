@@ -33,11 +33,11 @@ def recordings_dir() -> str:
 
 
 def recording_filename(preacher: str, when: datetime.datetime = None) -> str:
-    """„JJJJ.MM.TT - Prediger.wav“ (ohne Namen nur „JJJJ.MM.TT.wav“). Zeichen, die in Dateinamen nicht erlaubt sind, entfallen."""
+    """„JJJJ.MM.TT Prediger.wav“ (ohne Namen nur „JJJJ.MM.TT.wav“). Zeichen, die in Dateinamen nicht erlaubt sind, entfallen."""
     stamp = (when or datetime.datetime.now()).strftime("%Y.%m.%d")
     name = "".join(ch for ch in preacher if ch not in '<>:"/\\|?*' and ord(ch) >= 32)
     name = " ".join(name.split()).strip(" .")[:80].strip()
-    return f"{stamp} - {name}.wav" if name else f"{stamp}.wav"
+    return f"{stamp} {name}.wav" if name else f"{stamp}.wav"
 
 
 def _unique_path(path: str) -> str:
@@ -99,7 +99,7 @@ class AudioRecorder(QObject):
             self._set_state(REC)
 
     def stop_and_save(self, preacher: str = ""):
-        """Beendet die Aufnahme und speichert sie als „JJJJ.MM.TT - Prediger.wav“. Gibt den Dateipfad zurück (oder ``None``)."""
+        """Beendet die Aufnahme und speichert sie als „JJJJ.MM.TT Prediger.wav“. Gibt den Dateipfad zurück (oder ``None``)."""
         if self._state == IDLE:
             return None
 

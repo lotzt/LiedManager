@@ -1090,9 +1090,9 @@ def main() -> int:
     from services.recorder import recording_filename
     from services.settings import app_settings as _s
     from ui.updater_ui import KEY_CHECK_ON_START, KEY_SKIPPED, UpdateController
-    assert recording_filename("Max Muster", _dt.datetime(2026, 10, 18)) == "2026.10.18 - Max Muster.wav"
+    assert recording_filename("Max Muster", _dt.datetime(2026, 10, 18)) == "2026.10.18 Max Muster.wav"
     assert recording_filename("", _dt.datetime(2026, 10, 18)) == "2026.10.18.wav"
-    assert recording_filename('a/b:c?', _dt.datetime(2026, 10, 18)) == "2026.10.18 - abc.wav"
+    assert recording_filename('a/b:c?', _dt.datetime(2026, 10, 18)) == "2026.10.18 abc.wav"
 
     # Liste der gespielten Lieder und Testmodus
     from services.settings import app_settings as _ss

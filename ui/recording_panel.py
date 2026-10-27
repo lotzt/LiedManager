@@ -46,7 +46,7 @@ class RecordingPanel(QFrame):
         self.preacher_input = QLineEdit()
         self.preacher_input.setPlaceholderText("Prediger")
         self.preacher_input.setFixedHeight(32)
-        self.preacher_input.setToolTip("Name des Predigers – steht im Dateinamen der Aufnahme (Datum - Prediger)")
+        self.preacher_input.setToolTip("Name des Predigers – steht im Dateinamen der Aufnahme (Datum Prediger)")
         self.preacher_input.setStyleSheet(
             t.input_style("QLineEdit", "0 10px", background=t.CARD_BG)
         )

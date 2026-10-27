@@ -128,7 +128,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <button id="recBtn" class="round" title="Aufnahme starten" aria-label="Aufnahme"><span id="recDot" class="recdot"></span></button>
         <div class="grow recmid">
           <input id="preacher" class="small" type="text" maxlength="80" placeholder="Prediger" aria-label="Prediger"
-                 title="Name des Predigers – steht im Dateinamen der Aufnahme (Datum - Prediger)">
+                 title="Name des Predigers – steht im Dateinamen der Aufnahme (Datum Prediger)">
           <span id="recTime" class="rectime" title="Dauer der laufenden Aufnahme">00:00</span>
         </div>
         <button id="saveBtn" class="icon" title="Aufnahme speichern" aria-label="Aufnahme speichern" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>

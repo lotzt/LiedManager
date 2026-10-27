@@ -19,14 +19,14 @@ class PausentimerPanel(QFrame):
     BORDER = 1
     HEADER_HEIGHT = 64
     BOTTOM_PAD = 10
-    MAX_LINES = 10
-    MAX_CHARS = 54
+    MAX_LINES = 11
+    MAX_CHARS = 50
     # Windows zeichnet dieselbe Pixelgröße deutlich zierlicher als macOS – dort eine Stufe größer
-    FONT_PX = 13 if sys.platform.startswith("win") else 11
+    FONT_PX = 12 if sys.platform.startswith("win") else 11
     # So breit ist eine typische, volle Ansage (50 Zeichen). Ziffernreihen wie „0000…“ sind breiter als echter Text;
     # an ihnen gemessen würde die Schrift unnötig klein.
     FIT_SAMPLE = "Gemeindeversammlung am 12.09. um 19:30 Uhr im Saal"
-    LETTER_SPACING = 1.0
+    LETTER_SPACING = 0.3
 
     start_clicked = pyqtSignal()
     end_time_changed = pyqtSignal(QTime)

@@ -109,7 +109,7 @@ HTML = """<!doctype html>
         <button id="recBtn" class="round" title="Aufnahme starten" aria-label="Aufnahme"><span id="recDot" class="recdot"></span></button>
         <div class="grow recmid">
           <input id="preacher" class="small" type="text" maxlength="80" placeholder="Prediger" aria-label="Prediger"
-                 title="Name des Predigers – steht im Dateinamen der Aufnahme (Datum - Prediger)">
+                 title="Name des Predigers – steht im Dateinamen der Aufnahme (Datum Prediger)">
           <span id="recTime" class="rectime" title="Dauer der laufenden Aufnahme">00:00</span>
         </div>
         <button id="saveBtn" class="icon" title="Aufnahme speichern" aria-label="Aufnahme speichern" disabled>__ICON_CHECK__</button>
