@@ -1,11 +1,97 @@
 """Beamer-Fenster: zeigt die Liedbilder oben beginnend, horizontal zentriert, maximal groß und scharf."""
-from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QImage, QPainter, QPixmap
+import base64
+import binascii
+import logging
+import os
+import re
+
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QRect, Qt
+from PyQt6.QtGui import QImage, QImageIOHandler, QImageReader, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from services.settings import app_settings
 
+log = logging.getLogger(__name__)
+
 IMAGE_COLUMNS = (7, 8, 9, 10)  # bild1..bild4 im Datensatz
+MAX_SIDE = 4096                # größere Liedbilder werden schon beim Lesen verkleinert (Beamer haben höchstens 4K)
+_BASE64 = re.compile(r"^(data:image/[\w.+-]+;base64,)?[A-Za-z0-9+/=\s]+$")
+
+
+def _image_bytes(data):
+    """Bilddaten aus der Datenbank als Bytes. Meist sind es Bytes; manche Datenbanken speichern das Bild aber als Text:
+    als Base64-Text, als Dateipfad oder (SVG) als XML-Text – auch das wird erkannt."""
+    if isinstance(data, memoryview):
+        return data.tobytes()
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    if not isinstance(data, str) or not data.strip():
+        return b""
+    text = data.strip()
+    if len(text) < 1024 and os.path.isfile(text):             # Pfad zu einer Bilddatei
+        try:
+            with open(text, "rb") as handle:
+                return handle.read()
+        except OSError:
+            return b""
+    if len(text) > 64 and _BASE64.match(text[:4096]):          # Base64 (auch „data:image/png;base64,…“)
+        try:
+            return base64.b64decode(text.split(",", 1)[-1], validate=False)
+        except (binascii.Error, ValueError):
+            pass
+    return text.encode("utf-8")                                # z. B. SVG als Text
+
+
+def _mostly_dark(image: QImage) -> bool:
+    """Ist der sichtbare (nicht durchsichtige) Inhalt überwiegend dunkel – z. B. schwarze Noten/Schrift?
+    Dann braucht er einen weißen Hintergrund; heller Inhalt (weiße Schrift) bleibt auf Schwarz."""
+    small = image.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+    small = small.convertToFormat(QImage.Format.Format_ARGB32)
+    total, count = 0, 0
+    for y in range(small.height()):
+        for x in range(small.width()):
+            color = small.pixelColor(x, y)
+            if color.alpha() > 128:
+                total += color.lightness()
+                count += 1
+    return count == 0 or total / count < 128
+
+
+def decode_image(data, label: str = "") -> QImage:
+    """Liest ein Liedbild. Die Drehung aus den Foto-Daten (EXIF, z. B. Handyfotos) wird angewendet; Bilder mit
+    durchsichtigem Hintergrund bekommen einen passenden Hintergrund: weiß bei dunklem Inhalt (sonst wäre schwarze
+    Schrift auf dem schwarzen Beamer unsichtbar), schwarz bei heller Schrift."""
+    raw = _image_bytes(data)
+    if not raw:
+        return QImage()
+    buffer = QBuffer()
+    buffer.setData(QByteArray(raw))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer)
+    reader.setAutoTransform(True)
+    size = reader.size()
+    no_rotation = reader.transformation() == QImageIOHandler.Transformation.TransformationNone
+    if no_rotation and size.isValid() and max(size.width(), size.height()) > MAX_SIDE:
+        # Sehr große Bilder (z. B. 10 000 Pixel) gleich verkleinert lesen: schneller, braucht wenig Speicher und
+        # bleibt unter der Speichergrenze von Qt, an der solche Bilder sonst ohne Meldung scheitern
+        reader.setScaledSize(size.scaled(MAX_SIDE, MAX_SIDE, Qt.AspectRatioMode.KeepAspectRatio))
+    image = reader.read()
+    if image.isNull():
+        image = QImage.fromData(raw)                           # zweiter Versuch ohne Formaterkennung des Readers
+    if not image.isNull() and max(image.width(), image.height()) > MAX_SIDE:     # gedrehte Fotos: erst jetzt verkleinern
+        image = image.scaled(MAX_SIDE, MAX_SIDE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    if image.isNull():
+        log.warning("Liedbild %s lässt sich nicht lesen (%s, %d Bytes, beginnt mit %r)", label,
+                    reader.errorString(), len(raw), raw[:12])
+        return QImage()
+    if image.hasAlphaChannel():
+        flat = QImage(image.size(), QImage.Format.Format_RGB32)
+        flat.fill(Qt.GlobalColor.white if _mostly_dark(image) else Qt.GlobalColor.black)
+        painter = QPainter(flat)
+        painter.drawImage(0, 0, image)
+        painter.end()
+        image = flat
+    return image
 
 
 class ImagePresentationWindow(QWidget):
@@ -41,10 +127,11 @@ class ImagePresentationWindow(QWidget):
             return
         self.song_data = song_data
         self._images = []
-        for idx in IMAGE_COLUMNS:
+        number = song_data[1] if len(song_data) > 1 else "?"
+        for position, idx in enumerate(IMAGE_COLUMNS, 1):
             data = song_data[idx] if idx < len(song_data) else None
-            if data and isinstance(data, (bytes, bytearray)):
-                image = QImage.fromData(bytes(data))
+            if data:
+                image = decode_image(data, f"{number}/bild{position}")
                 if not image.isNull():
                     self._images.append(image)
         self._rendered_key = None
@@ -103,11 +190,18 @@ class ImagePresentationWindow(QWidget):
         if self._frameless != fullscreen:  # Fenster-Flags nur bei Moduswechsel ändern (vermeidet Flackern)
             flags = Qt.WindowType.Window
             if fullscreen:
-                flags |= Qt.WindowType.FramelessWindowHint
+                # Immer oben (wie das Kamera-Vollbild): ein Klick ins Hauptfenster oder in ein anderes Programm darf das
+                # Beamer-Bild nicht verdecken – unter Windows sah das aus, als würde es geschlossen
+                flags |= Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
             self.setWindowFlags(flags)
             self._frameless = fullscreen
 
         if fullscreen:
+            # Erst dem Fenster den Beamer-Bildschirm zuweisen, dann Vollbild. Sonst geht Windows (je nach Anordnung der
+            # Bildschirme) auf den Hauptbildschirm statt auf den Beamer.
+            self.winId()                                      # natives Fenster anlegen, damit windowHandle() existiert
+            if self.windowHandle() is not None:
+                self.windowHandle().setScreen(screen)
             self.setGeometry(screen.geometry())
             self.showFullScreen()
         else:

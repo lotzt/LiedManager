@@ -42,6 +42,8 @@ def main() -> int:
 
     _windows_app_id()
     app = QApplication(sys.argv)
+    from PyQt6.QtGui import QImageReader
+    QImageReader.setAllocationLimit(2048)   # MB; Qt-Standard 256 MB verwirft sehr große Bilder (z. B. über 10 000 Pixel)
     app.setApplicationDisplayName("LiedManager")
     from services import songlog
     from services.settings import app_settings

@@ -1,6 +1,8 @@
 """Aufnahmen nach dem Speichern automatisch auf die eigene Website laden (Adresse und Token wie bei der Remote-Funktion)."""
+import datetime
 import logging
 import os
+import re
 import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -18,7 +20,35 @@ KEY_WP_ENABLED = "recording_upload_wordpress"       # Ziel: WordPress-Mediathek 
 KEY_WP_URL = "recording_wp_url"
 KEY_WP_USER = "recording_wp_user"
 KEY_WP_PASSWORD = "recording_wp_password"
+KEY_UPLOAD_DAYS = "recording_upload_days"         # Wochentage (1 = Montag … 7 = Sonntag), z. B. "7"; leer/fehlt = alle
 STATUS_OFF = "Aus"
+DAY_NAMES = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+
+
+def upload_days() -> set:
+    """Die Wochentage, deren Aufnahmen hochgeladen werden (1 = Montag … 7 = Sonntag). Nichts eingestellt = alle."""
+    text = str(app_settings().value(KEY_UPLOAD_DAYS, "", type=str))
+    days = {int(d) for d in re.findall(r"[1-7]", text)}
+    return days or set(range(1, 8))
+
+
+def recording_day(path: str):
+    """Datum der Aufnahme: aus dem Dateinamen („JJJJ.MM.TT Prediger“), sonst aus dem Änderungsdatum der Datei."""
+    match = re.match(r"(\d{4})[.\-_](\d{2})[.\-_](\d{2})", os.path.basename(path))
+    if match:
+        try:
+            return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            pass
+    try:
+        return datetime.date.fromtimestamp(os.path.getmtime(path))
+    except OSError:
+        return None
+
+
+def day_allowed(path: str) -> bool:
+    day = recording_day(path)
+    return day is None or day.isoweekday() in upload_days()
 
 
 class RecordingUploader(QObject):
@@ -49,9 +79,15 @@ class RecordingUploader(QObject):
             self.status_changed.emit(text)
 
     def _on_saved(self, path: str) -> None:
-        if self.enabled():
-            upload.add_pending(path)
-            self.start()
+        if not self.enabled():
+            return
+        if not day_allowed(path):
+            day = recording_day(path)
+            self._set_status(f"„{os.path.basename(path)}“ wird nicht hochgeladen ({DAY_NAMES[day.isoweekday() - 1]} "
+                             "ist nicht ausgewählt).")
+            return
+        upload.add_pending(path)
+        self.start()
 
     def start(self) -> None:
         if not self.enabled() or (self._thread is not None and self._thread.is_alive()):
@@ -78,6 +114,9 @@ class RecordingUploader(QObject):
             name = os.path.basename(path)
             if not os.path.isfile(path):
                 upload.remove_pending(path)                  # Datei gibt es nicht mehr
+                continue
+            if not day_allowed(path):                        # Wochentag inzwischen abgewählt: nicht mehr hochladen
+                upload.remove_pending(path)
                 continue
 
             def progress(done, total, name=name):

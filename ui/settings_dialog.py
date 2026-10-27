@@ -18,7 +18,8 @@ from ui import theme as t
 from ui.sync_ui import KEY_SYNC_AUTO, KEY_SYNC_TOKEN, KEY_SYNC_URL, STATUS_OFF
 from ui.updater_ui import KEY_CHECK_ON_START
 from services.remote_relay import device_name
-from ui.recording_upload_ui import KEY_UPLOAD_ENABLED, KEY_WP_ENABLED, KEY_WP_PASSWORD, KEY_WP_URL, KEY_WP_USER
+from ui.recording_upload_ui import (KEY_UPLOAD_DAYS, KEY_UPLOAD_ENABLED, KEY_WP_ENABLED, KEY_WP_PASSWORD, KEY_WP_URL,
+                                    KEY_WP_USER, upload_days)
 from ui.web_remote_ui import KEY_DEVICE_NAME, KEY_SITE_ENABLED, KEY_SITE_TOKEN, KEY_SITE_URL
 from ui.widgets import round_combo_popup
 
@@ -598,6 +599,26 @@ class SettingsDialog(QDialog):
                                           "„Neues Anwendungspasswort hinzufügen“, den angezeigten Code hier einfügen.")
         for edit in (self.wp_url_input, self.wp_user_input, self.wp_password_input):
             edit.editingFinished.connect(self._save_wp_fields)
+        # Nur Aufnahmen von diesen Wochentagen hochladen (z. B. nur Sonntag)
+        self.upload_day_boxes = []
+        days_row = QHBoxLayout()
+        days_row.setSpacing(10)
+        for number, short in enumerate(("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"), 1):
+            box = self._checkbox(short)
+            box.setToolTip(f"Aufnahmen vom {('Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag')[number - 1]} hochladen")
+            box.toggled.connect(self._save_upload_days)
+            box.setProperty("day", number)
+            self.upload_day_boxes.append(box)
+            days_row.addWidget(box)
+        days_row.addStretch(1)
+        self.upload_days_box = QWidget()
+        days_layout = QVBoxLayout(self.upload_days_box)
+        days_layout.setContentsMargins(0, 0, 0, 0)
+        days_layout.setSpacing(6)
+        days_caption = QLabel("Nur Aufnahmen von diesen Tagen hochladen")
+        days_caption.setStyleSheet(t.caption_style())
+        days_layout.addWidget(days_caption)
+        days_layout.addLayout(days_row)
         self.upload_status_label = QLabel("Aus")
         self.upload_status_label.setWordWrap(True)
         self.upload_status_label.setStyleSheet(t.hint_style())
@@ -615,6 +636,7 @@ class SettingsDialog(QDialog):
                        self._two_fields(self._field("WordPress-Adresse", self.wp_url_input),
                                         self._field("Benutzername", self.wp_user_input),
                                         self._field("Anwendungspasswort", self.wp_password_input)),
+                       self.upload_days_box,
                        self.upload_status_label,
                        title="Aufnahmen hochladen",
                        info="Benutzer mit Rolle „Autor“ oder höher. Das Anwendungspasswort erstellst du in WordPress unter Benutzer → Profil. "
@@ -636,6 +658,18 @@ class SettingsDialog(QDialog):
         s.setValue(KEY_WP_USER, self.wp_user_input.text().strip())
         s.setValue(KEY_WP_PASSWORD, self.wp_password_input.text().strip())
         s.sync()
+
+    def _save_upload_days(self, *_args):
+        days = [str(box.property("day")) for box in self.upload_day_boxes if box.isChecked()]
+        if not days:                                  # mindestens ein Tag: sonst bliebe unklar, ob „keiner“ oder „alle“ gemeint ist
+            sender = self.sender()
+            if sender is not None:
+                sender.blockSignals(True)
+                sender.setChecked(True)
+                sender.blockSignals(False)
+                days = [str(sender.property("day"))]
+        self.settings.setValue(KEY_UPLOAD_DAYS, ",".join(days))
+        self.settings.sync()
 
     def _wp_toggled(self, on: bool):
         """Ein Schalter: Aufnahmen nach dem Speichern automatisch in die WordPress-Mediathek hochladen."""
@@ -976,6 +1010,11 @@ class SettingsDialog(QDialog):
         self.wp_checkbox.setChecked(s.value(KEY_WP_ENABLED, False, type=bool) and s.value(KEY_UPLOAD_ENABLED, False, type=bool))
         self.wp_checkbox.blockSignals(False)
         self.wp_url_input.setText(s.value(KEY_WP_URL, "", type=str))
+        chosen = upload_days()
+        for box in self.upload_day_boxes:
+            box.blockSignals(True)
+            box.setChecked(box.property("day") in chosen)
+            box.blockSignals(False)
         self.wp_user_input.setText(s.value(KEY_WP_USER, "", type=str))
         self.wp_password_input.setText(s.value(KEY_WP_PASSWORD, "", type=str))
         self.site_url_input.setText(s.value(KEY_SITE_URL, "", type=str))
