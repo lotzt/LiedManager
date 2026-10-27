@@ -499,3 +499,40 @@ class SmoothListWidget(QListWidget):
         self._glide.setEndValue(target)
         self._glide.start()
         event.accept()
+
+
+def show_fullscreen_on(widget, screen) -> None:
+    """Zeigt ein Fenster im Vollbild auf einem bestimmten Bildschirm (Beamer) – zuverlässig auch unter Windows.
+
+    Windows behält ein Vollbild-Fenster auf seinem bisherigen Bildschirm, und vor dem ersten Anzeigen wird eine
+    Bildschirm-Zuweisung teils übergangen (dann landete das Bild auf Bildschirm 1 und erst bei späteren Aufrufen
+    richtig). Deshalb: aus dem Vollbild heraus, als normales Fenster auf den Ziel-Bildschirm legen und anzeigen, erst
+    dann Vollbild – und kurz danach nachprüfen und notfalls noch einmal verschieben."""
+    from PyQt6.QtCore import QTimer
+    target = screen.geometry()
+    if widget.isVisible() and widget.isFullScreen() and widget.screen() == screen:
+        widget.raise_()
+        return
+    if widget.isFullScreen():
+        widget.showNormal()
+    widget.setGeometry(target)
+    widget.show()
+    handle = widget.windowHandle()
+    if handle is not None and handle.screen() != screen:
+        handle.setScreen(screen)
+        widget.setGeometry(target)
+    widget.showFullScreen()
+
+    def check() -> None:
+        try:
+            if not widget.isVisible() or widget.screen() == screen:
+                return
+            widget.showNormal()
+            if widget.windowHandle() is not None:
+                widget.windowHandle().setScreen(screen)
+            widget.setGeometry(target)
+            widget.showFullScreen()
+        except RuntimeError:                 # Fenster wurde inzwischen geschlossen
+            pass
+
+    QTimer.singleShot(150, check)

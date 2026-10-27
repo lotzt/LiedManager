@@ -304,11 +304,8 @@ class PauseWindow(QWidget):
     def show_on_beamer(self) -> None:
         screens = QApplication.screens()
         screen = screens[self.screen_index] if 0 <= self.screen_index < len(screens) else QApplication.primaryScreen()
-        self.winId()
-        if self.windowHandle() is not None:
-            self.windowHandle().setScreen(screen)
-        self.setGeometry(screen.geometry())
-        self.showFullScreen()
+        from ui.widgets import show_fullscreen_on
+        show_fullscreen_on(self, screen)
 
     def set_state(self, scene_name: str, number=None, texts: dict = None) -> None:
         changed_number = number is not None and number != self.number

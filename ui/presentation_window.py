@@ -197,13 +197,8 @@ class ImagePresentationWindow(QWidget):
             self._frameless = fullscreen
 
         if fullscreen:
-            # Erst dem Fenster den Beamer-Bildschirm zuweisen, dann Vollbild. Sonst geht Windows (je nach Anordnung der
-            # Bildschirme) auf den Hauptbildschirm statt auf den Beamer.
-            self.winId()                                      # natives Fenster anlegen, damit windowHandle() existiert
-            if self.windowHandle() is not None:
-                self.windowHandle().setScreen(screen)
-            self.setGeometry(screen.geometry())
-            self.showFullScreen()
+            from ui.widgets import show_fullscreen_on
+            show_fullscreen_on(self, screen)                  # zuverlässig auf den Beamer (auch unter Windows)
         else:
             area = screen.availableGeometry()
             width = int(area.width() * 0.6)
