@@ -20,7 +20,6 @@ from paths import resolve_db_path
 from services import atem, songlog, xair
 from services.gong import Gong
 from services.playback import AudioPlayback
-from services.powerpoint import PausentimerController
 from services.recorder import AudioRecorder
 from services.settings import app_settings
 from ui import theme as t
@@ -28,6 +27,7 @@ from ui import widgets as w
 from ui.camera_panel import CameraPanel
 from ui.gallery_window import GalleryWindow
 from ui.images_panel import ImageDropFilter, ImagesPanel
+from ui.pause_window import Pausentimer
 from ui.pausentimer_panel import PausentimerPanel
 from ui.player_panel import PlayerPanel
 from ui.presentation_window import ImagePresentationWindow
@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
         self.playback = AudioPlayback(self)
         self.gong = Gong(self)
         self.recorder = AudioRecorder(self)
-        self.pausentimer = PausentimerController(self)
+        self.pausentimer = Pausentimer(self)           # ohne PowerPoint (Standard) oder mit – siehe Einstellungen
 
         self._build_ui()
         self._connect_services()
@@ -193,9 +193,12 @@ class MainWindow(QMainWindow):
         self.pausentimer_panel.start_clicked.connect(self._on_pausentimer_start_clicked)
         self.pausentimer_panel.end_time_changed.connect(self.pausentimer.set_end_time)
         self.pausentimer_panel.toggled.connect(self._on_pausentimer_toggled)
+        self.pausentimer_panel.text_edit.textChanged.connect(          # Ansagen ändern sich sofort auf dem Beamer
+            lambda: self.pausentimer.update_lines(self.pausentimer_panel.lines()))
         self.pausentimer.running_changed.connect(self.pausentimer_panel.set_running)
         self.pausentimer.running_changed.connect(
-            lambda running: self.close_beamer_windows() if running else None)   # Pausenfolie ersetzt Lied/Bilder/Kamera
+            lambda running: self.close_beamer_windows(keep="pause") if running else None)   # Pausenfolie ersetzt Lied/Bilder/Kamera
+        # keep="pause": der Mischer bleibt auf „Präsentation“ (sonst schaltete das Schließen ihn gleich wieder zurück)
 
     def _show_error(self, title: str, message: str):
         QMessageBox.warning(self, title, message)

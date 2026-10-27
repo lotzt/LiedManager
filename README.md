@@ -160,19 +160,28 @@ Startet die Oberfläche ohne Bildschirm, prüft die wichtigsten Abläufe und leg
 
 Siehe [RELEASE.md](RELEASE.md).
 
-## Eigene Pausenfolie (PowerPoint)
+## Pausenfolie
 
-Der Pausentimer öffnet eine PowerPoint-Datei im Vollbild und schaltet die Folien passend zur Restzeit um. Eine Vorlage wird
-**nicht mitgeliefert** – du legst deine eigene ab: *Einstellungen → Anzeige → „Ordner für Pausenfolien öffnen“*, dort
-eine Datei `pausentimer_<Jahreszeit>.pptx` (`frühling`, `sommer`, `herbst` oder `winter`; die Jahreszeit wählst du in den
-Einstellungen). Aufbau der Datei (63 Folien):
+Der Pausentimer zeigt in der Pause eine Pausenfolie auf dem Beamer: erst die Ansagen, ab 5 Minuten vor Ende einen Bibelvers,
+in der letzten Minute einen Countdown (mit Musik) und am Ende „Ende!“. Gestaltet wird sie in PowerPoint – eine Vorlage wird
+**nicht mitgeliefert**, du legst deine eigene ab: *Einstellungen → Pausentimer → „Vorlagen-Ordner“*, dort eine Datei
+`pausentimer_<Jahreszeit>.pptx` (`frühling`, `sommer`, `herbst` oder `winter`; die Jahreszeit wählst du daneben).
+
+**Ohne PowerPoint (Standard):** LiedManager übernimmt die Vorlage einmal („Vorlage übernehmen …“ oder automatisch beim
+ersten Start des Pausentimers) und zeigt die Folien dann selbst – sofort, ohne Fremdfenster, auf Mac und Windows gleich.
+Übernommen werden Bilder, Texte, Schriften, Farben, Positionen, der Bibelvers, der Puls-Effekt des Countdowns und die Musik
+(ab welcher Sekunde, Lautstärke). Alles davon lässt sich danach in den Einstellungen ändern, mit Vorschau. Ansagen erscheinen
+beim Tippen sofort auf dem Beamer. Schriften, die nur teilweise in der Vorlage stecken (z. B. Montserrat), müssen auf dem
+Rechner installiert sein; sonst nimmt das Programm Arial. Logik: `services/pausenfolie.py`, Anzeige: `ui/pause_window.py`.
+
+**Mit PowerPoint:** In den Einstellungen „PowerPoint (wie bisher)“ wählen. Aufbau der Datei (63 Folien):
 
 * Folie 1: Startfolie, mit einem Textfeld namens `AnsagenTextfeld` (sonst das erste Textfeld) für die Ansagen
-* Folie 2: „noch 5 Minuten“ (gilt ab 5 Minuten Restzeit)
+* Folie 2: Bibelvers (gilt ab 5 Minuten Restzeit)
 * Folie 3 bis 62: der Countdown, eine Folie pro Sekunde von 60 bis 1
 * Folie 63: „Ende!“
 
-Voraussetzung ist Microsoft PowerPoint auf Mac oder Windows.
+Für diese Art ist Microsoft PowerPoint auf Mac oder Windows nötig.
 
 ## Liste der gespielten Lieder
 

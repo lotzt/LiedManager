@@ -661,6 +661,101 @@ def test_remote_site() -> None:
     assert "die du in der Datei remote.php festgelegt hast" in committed, "Anmeldetext der Website-Ausführung fehlt"
 
 
+def make_test_pptx(path: Path) -> None:
+    """Kleine Pausenfolien-Vorlage wie die echte: Ansagen, Bibelvers, Countdown „60“, „Ende!“ – mit Bild und Farben."""
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.util import Emu, Pt
+    from PyQt6.QtGui import QColor, QImage
+    picture = path.with_suffix(".png")
+    image = QImage(64, 64, QImage.Format.Format_RGB32)
+    image.fill(QColor("#335577"))
+    image.save(str(picture))
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Emu(18288000), Emu(10287000)
+    layout = prs.slide_layouts[6]
+
+    def box(slide, name, text, x, y, w, h, size, color="323232"):
+        shape = slide.shapes.add_textbox(Emu(x), Emu(y), Emu(w), Emu(h))
+        shape.name = name
+        run = shape.text_frame.paragraphs[0].add_run()
+        run.text = text
+        run.font.size = Pt(size)
+        run.font.name = "Arial"
+        run.font.color.rgb = RGBColor.from_string(color)
+        return shape
+
+    first = prs.slides.add_slide(layout)
+    first.shapes.add_picture(str(picture), 0, 0, Emu(18288000), Emu(10287000))
+    box(first, "TextBox 4", "Ansagen", 1747110, 309926, 5392916, 2206181, 139)
+    box(first, "AnsagenTextfeld", "Platzhalter", 1282360, 3133156, 10661768, 1342034, 34)
+    second = prs.slides.add_slide(layout)
+    box(second, "TextBox 4", "Bibelvers", 1747110, 309926, 6482490, 2206181, 139)
+    verse = box(second, "TextBox 6", "Ehre sei Gott in der Höhe", 1758832, 3439268, 9366367, 7705827, 39)
+    verse.text_frame.add_paragraph().add_run().text = "\t\tLukas 2,14"
+    third = prs.slides.add_slide(layout)
+    third.shapes.add_picture(str(picture), Emu(1028700), Emu(773485), Emu(8729105), Emu(8740030))
+    box(third, "TextBox 5", "60", 3676956, 2399575, 3432592, 5340821, 337, "404040")
+    last = prs.slides.add_slide(layout)
+    box(last, "TextBox 5", "Ende!", 345002, 2517076, 10096500, 5252848, 275, "404040")
+    prs.save(str(path))
+
+
+def test_pausenfolie(tmp, window, app) -> None:
+    """Pausenfolie ohne PowerPoint: Vorlage übernehmen, Ablauf nach Restzeit, Anzeige auf dem Beamer, Live-Ansagen."""
+    from services import pausenfolie
+    from ui import pause_window
+    from services.settings import app_settings as _settings
+    source = tmp / "pausentimer_test.pptx"
+    make_test_pptx(source)
+    design = pausenfolie.import_pptx(source, "test")
+    assert set(design["scenes"]) == set(pausenfolie.SCENES), "es fehlen Ansichten"
+    roles = {layer.get("role") for scene in design["scenes"].values() for layer in scene["layers"]
+             if layer["kind"] == "text"}
+    assert {"announcements", "verse", "number", "end", "static"} <= roles, f"Text-Rollen fehlen: {roles}"
+    assert design["verse_text"] == "Ehre sei Gott in der Höhe" and design["verse_reference"] == "Lukas 2,14"
+    assert design["timing"]["countdown_seconds"] == 60
+    number = pausenfolie.text_layer(design, "countdown", "number")
+    assert number and "center_in" in number, "die Zahl gehört mittig in den Kreis"
+    assert [pausenfolie.phase(s, design) for s in (400, 300, 61, 60, 0.4, 0)] == [
+        ("announcements", None), ("verse", None), ("verse", None), ("countdown", 60), ("countdown", 1), ("end", None)]
+    previews = pause_window.preview_images("test", (320, 180), ["Erste Ansage", "Zweite Ansage"])
+    assert [name for name, _img in previews] == ["Ansagen", "Bibelvers", "Countdown", "Ende"]
+    assert all(not img.isNull() and img.width() == 320 for _name, img in previews), "Vorschau wird nicht gezeichnet"
+    for name, img in previews:
+        img.save(str(SHOTS / f"pausenfolie_{name}.png"))
+    assert pause_window._pulse_values(0.0) == (1.0, 1.0) and pause_window._pulse_values(0.5) == (1.05, 1.0), \
+        "Pulsieren darf die Zahl nicht durchsichtig machen"
+    assert design["pulse"] is False, "wie in PowerPoint: Zahlen wechseln ohne Effekt"
+
+    # Ablauf mit echtem Fenster (Musik gibt es in der Testvorlage nicht)
+    _settings().setValue("presentation_season", "test")
+    _settings().setValue(pause_window.KEY_MODE, "liedmanager")
+    timer = window.pausentimer
+    from PyQt6.QtCore import QTime
+    import datetime as _dt
+    end = (_dt.datetime.now() + _dt.timedelta(minutes=20)).time()
+    timer.start(["Hallo"], QTime(end.hour, end.minute))
+    assert timer.running and timer._active is timer._native, "Pausentimer ohne PowerPoint startet nicht"
+    native = timer._native
+    app.processEvents()
+    assert native._window is not None and native._window.isVisible() and native._window.scene_name == "announcements"
+    assert native._window.texts.get("announcements") == "Hallo", "Ansagen müssen schon beim Start auf dem Beamer stehen"
+    window.pausentimer_panel.text_edit.setPlainText("Neue Ansage")
+    assert native._texts["announcements"] == "Neue Ansage", "Ansagen müssen live auf den Beamer"
+    native._finish = _dt.datetime.now() + _dt.timedelta(seconds=30.5)
+    native._tick()
+    assert native._window.scene_name == "countdown" and native._window.number == 31
+    native._window.grab().save(str(SHOTS / "pausenfolie_beamer.png"))
+    native._finish = _dt.datetime.now() - _dt.timedelta(seconds=1)
+    native._tick()
+    assert native._window.scene_name == "end"
+    timer.stop()
+    assert not timer.running and native._window is None, "Pausentimer stoppt nicht"
+    _settings().setValue("presentation_season", "frühling")
+    window.pausentimer_panel.text_edit.setPlainText("")
+
+
 def test_history_and_problem_report(tmp) -> None:
     """Liedhistorie (Datei lesen/suchen/zählen) und automatische Problemmeldung (Entdoppeln, Warteschlange, Datenschutz)."""
     import tempfile
@@ -901,7 +996,7 @@ def main() -> int:
 
     dialog = SettingsDialog(window)
     dialog.show()
-    for index, name in enumerate(("anzeige", "atem", "kameras", "audio", "daten")):
+    for index, name in enumerate(("anzeige", "pausentimer", "audio", "kameras", "atem", "daten")):
         dialog.tab_group.button(index).click()
         settle()
         dialog.grab().save(str(SHOTS / f"05_einstellungen_{name}.png"))
@@ -1263,16 +1358,16 @@ def main() -> int:
     assert offers == ["9.9.9", "9.9.9"], "manuelle Suche zeigt auch übersprungene Versionen"
     _s().setValue(KEY_SKIPPED, "")
     assert controller.blocking_reason() == "", "ohne laufende Dienste darf installiert werden"
-    window.pausentimer._running = True
+    window.pausentimer._native._running = True
     assert "Pausentimer" in controller.blocking_reason()
-    window.pausentimer._running = False
+    window.pausentimer._native._running = False
 
     # ---- Pausentimer: Folienwechsel hängen weder vom Fenster-Fokus noch von einem hängenden Skript ab ---
     import datetime
 
     from services import power
     from services.powerpoint import goto_command
-    ctrl = window.pausentimer
+    ctrl = window.pausentimer._powerpoint                 # PowerPoint-Pausentimer (Einstellung „PowerPoint“)
     calls = []
     ctrl._run_script = lambda command, callback, timeout_ms=0: calls.append(command)
     ctrl._running, ctrl._slide = True, None
@@ -1307,6 +1402,8 @@ def main() -> int:
         time.sleep(0.01)
     assert hang and hang[0][0] is False and "Zeitüberschreitung" in hang[0][1], f"hängendes Skript wird nicht beendet: {hang}"
     assert ctrl._script_busy is False, "nach einem hängenden Skript muss der nächste Folienwechsel wieder möglich sein"
+
+    test_pausenfolie(tmp, window, app)
 
     awake = power.keep_awake()                            # Rechner/Beamer wach, Programm im Hintergrund nicht gedrosselt
     if sys.platform == "darwin" or sys.platform.startswith("win"):
@@ -1402,12 +1499,12 @@ def main() -> int:
     dialog = _SettingsDialog(window)
     assert not hasattr(dialog, "remote_checkbox"), "der lokale Webserver ist entfernt"
     tab_names = [dialog.tab_group.button(i).text() for i in range(len(dialog.tab_group.buttons()))]
-    assert tab_names == ["Anzeige", "Audio", "Kamera", "Mischpult", "Datenbank", "Remote", "Update"], tab_names
-    assert dialog.pages.widget(4).isAncestorOf(dialog.db_path_input) and dialog.pages.widget(4).isAncestorOf(dialog.sync_url_input)
-    assert dialog.pages.widget(6).isAncestorOf(dialog.update_checkbox)
-    assert not dialog.pages.widget(4).isAncestorOf(dialog.site_checkbox), "Remote gehört in den Reiter „Remote“"
-    assert dialog.pages.widget(0).isAncestorOf(dialog.open_presentations_btn), "Pausenfolien-Ordner gehört zur Pausentimer-Vorlage"
-    assert dialog.pages.widget(5).isAncestorOf(dialog.site_url_input)
+    assert tab_names == ["Anzeige", "Pausentimer", "Audio", "Kamera", "Mischpult", "Datenbank", "Remote", "Update"], tab_names
+    assert dialog.pages.widget(5).isAncestorOf(dialog.db_path_input) and dialog.pages.widget(5).isAncestorOf(dialog.sync_url_input)
+    assert dialog.pages.widget(7).isAncestorOf(dialog.update_checkbox)
+    assert not dialog.pages.widget(5).isAncestorOf(dialog.site_checkbox), "Remote gehört in den Reiter „Remote“"
+    assert dialog.pages.widget(1).isAncestorOf(dialog.open_presentations_btn), "Pausenfolien-Ordner gehört zur Pausentimer-Vorlage"
+    assert dialog.pages.widget(6).isAncestorOf(dialog.site_url_input)
     for key in LEGACY_KEYS:                                   # alte Einstellungen (auch die PIN im Klartext) werden entfernt
         app_settings().setValue(key, "alt")
     window.remote.configure()

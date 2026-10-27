@@ -458,7 +458,7 @@ class PausentimerController(QObject):
         source = template_path(season)
         if not source.exists():
             self.error.emit(f"Keine Pausenfolie gefunden: „{source.name}“.\n\nLege deine PowerPoint-Vorlage unter diesem Namen in "
-                            f"den Ordner\n{source.parent}\n(Einstellungen → Anzeige → „Ordner für Pausenfolien öffnen“).")
+                            f"den Ordner\n{source.parent}\n(Einstellungen → Pausentimer → „Vorlagen-Ordner“).")
             return
 
         self._preparing = True

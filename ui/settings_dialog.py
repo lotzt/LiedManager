@@ -40,8 +40,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._updates_available = updates_available
         self.setWindowTitle("LiedManager – Einstellungen")
-        self.setMinimumSize(720, 480)
-        self.resize(760, 600)          # die endgültige Höhe ergibt sich aus der höchsten Seite (_fit_height)
+        self.setMinimumSize(800, 480)
+        self.resize(880, 600)          # die endgültige Höhe ergibt sich aus der höchsten Seite (_fit_height)
         self.setStyleSheet(t.panel_style("Card") + t.primary_button_style("PrimaryButton"))
 
         self.settings = app_settings()
@@ -50,6 +50,7 @@ class SettingsDialog(QDialog):
         self.ccli_ask.connect(self._on_ccli_ask)
         self.ccli_progress.connect(self._on_ccli_progress)
         self.load_settings()
+        self._fit_fields()
         self._fit_height()
 
     # ------------------------------------------------------------------
@@ -176,7 +177,7 @@ class SettingsDialog(QDialog):
     def _spinbox(low: int = 1, high: int = 20) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(low, high)
-        spin.setFixedSize(92, FIELD_H)
+        spin.setFixedSize(92, FIELD_H)            # wird nach dem Aufbau an den Inhalt angepasst (siehe _fit_fields)
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         spin.setStyleSheet(t.spinbox_style())
         return spin
@@ -213,6 +214,7 @@ class SettingsDialog(QDialog):
         self.tab_group.setExclusive(True)
         entries = (
             ("Anzeige", self.create_display_tab()),
+            ("Pausentimer", self.create_pause_tab()),
             ("Audio", self.create_audio_tab()),
             ("Kamera", self.create_camera_tab()),
             ("Mischpult", self.create_atem_tab()),
@@ -226,7 +228,7 @@ class SettingsDialog(QDialog):
             btn.setFixedHeight(36)
             btn.setAutoDefault(False)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(t.pill_button_style(radius=18, font_size=13) + "QPushButton { padding: 0 12px; }")
+            btn.setStyleSheet(t.pill_button_style(radius=18, font_size=13) + "QPushButton { padding: 0 10px; }")
             btn.setToolTip(f"Einstellungen: {label}")
             self.tab_group.addButton(btn, index)
             tab_row.addWidget(btn)
@@ -260,6 +262,40 @@ class SettingsDialog(QDialog):
         footer.addWidget(save)
         root.addLayout(footer)
 
+    def _fit_fields(self) -> None:
+        """Zahlenfelder (mit Einheit wie „ min“, „ px“, „ %“), Auswahllisten und Eingabefelder so breit machen, dass ihr
+        Inhalt ganz sichtbar ist – auf Windows sind die Schriften breiter als am Mac. Gemessen wird mit der größeren von
+        Widget-Schrift und Stylesheet-Schrift (halbfett), dazu ein Sicherheitszuschlag."""
+        from PyQt6.QtGui import QFont, QFontMetrics
+        from PyQt6.QtWidgets import QComboBox, QFontComboBox
+
+        def width_of(widget, text: str) -> int:
+            widget.ensurePolished()
+            fonts = [QFont(widget.font())]
+            styled = QFont(widget.font())
+            styled.setPixelSize(t.FS)
+            styled.setWeight(QFont.Weight.DemiBold)
+            fonts.append(styled)
+            return max(QFontMetrics(font).horizontalAdvance(text) for font in fonts)
+
+        for spin in self.findChildren(QSpinBox):
+            texts = [spin.prefix() + str(value) + spin.suffix() for value in (spin.minimum(), spin.maximum())]
+            if spin.specialValueText():
+                texts.append(spin.specialValueText())
+            need = max(width_of(spin, text) for text in texts) + 12 + 34 + 24   # Innenabstand + Pfeile + Luft
+            spin.setFixedWidth(max(spin.width(), need))
+        for combo in self.findChildren(QComboBox):
+            if isinstance(combo, QFontComboBox):        # Schriftlisten: feste, bequeme Breite (sonst sehr breit)
+                continue
+            widest = max((width_of(combo, combo.itemText(i)) for i in range(combo.count())), default=0)
+            combo.setMinimumWidth(min(440, max(combo.minimumWidth(), widest + 12 + 40 + 16)))
+        for edit in self.findChildren(QLineEdit):
+            if edit.parent() is not None and isinstance(edit.parent(), (QSpinBox, QComboBox)):
+                continue                                # innere Felder von Zahlenfeldern und Listen
+            text = max(edit.text(), edit.placeholderText(), key=len)
+            if text:
+                edit.setMinimumWidth(min(280, max(edit.minimumWidth(), width_of(edit, text) + 24 + 16)))   # nicht breiter als die Seite
+
     def _fit_height(self) -> None:
         """Macht den Dialog so hoch, dass die höchste Seite (Datenbank) ganz zu sehen ist und nicht gescrollt werden muss.
         Nur auf sehr kleinen Bildschirmen wird gekürzt – dann greift die Bildlauf-Fläche."""
@@ -288,7 +324,7 @@ class SettingsDialog(QDialog):
             self.season_combo.addItem(label, key)
         self.season_combo.setToolTip("Welche Pausenfolie (PowerPoint-Vorlage) der Pausentimer verwendet\n"
                                      "Genutzt wird die Datei „pausentimer_<Jahreszeit>.pptx“")
-        self.open_presentations_btn = self._outline_button("Ordner für Pausenfolien öffnen")
+        self.open_presentations_btn = self._outline_button("Vorlagen-Ordner")
         self.open_presentations_btn.clicked.connect(self.open_presentation_folder)
         self.open_presentations_btn.setToolTip(
             "Öffnet den Ordner für deine Pausenfolien im Datei-Manager\n"
@@ -331,14 +367,16 @@ class SettingsDialog(QDialog):
                 self.fullscreen_checkbox,
                 title="Beamer", info="Auf diesem Bildschirm (Zweitmonitor) erscheinen Beamer-Bild und Kamera-Vollbild.",
             ),
-            self._card(
-                self._field("Jahreszeit", self.season_combo),
-                self.open_presentations_btn,
-                title="Pausentimer", info="Welche Pausenfolie (PowerPoint-Vorlage) verwendet wird: die Datei „pausentimer_<Jahreszeit>.pptx“."),
             self._card(self.songlog_checkbox, self.history_btn,
                        title="Gespielte Lieder",
                        info="Jedes gezeigte Lied kommt mit Nummer und Titel in die Liste. Daraus entsteht die CCLI-Meldung (Reiter Remote)."),
         )
+
+    def create_pause_tab(self):
+        """Eigener Reiter: Pausenfolie (Art, Jahreszeit, Vorlage, Vorschau, Bibelvers, Ablauf, Musik, Schrift)."""
+        from ui.pause_settings import PauseSettings
+        self.pause_settings = PauseSettings(self)
+        return self._page(*self.pause_settings.cards())
 
     def create_atem_tab(self):
         self.atem_enabled_checkbox = self._checkbox("Automatisch ansteuern")
@@ -978,6 +1016,7 @@ class SettingsDialog(QDialog):
         self.screen_combo.setCurrentIndex(s.value("beamer_screen", 0, type=int))
         self.fullscreen_checkbox.setChecked(s.value("fullscreen_mode", True, type=bool))
         self._select_data(self.season_combo, s.value("presentation_season", "frühling", type=str))
+        self.pause_settings.load()
         self.songlog_checkbox.setChecked(s.value(songlog.KEY_ENABLED, True, type=bool))
         self.autostart_checkbox.setChecked(autostart.is_enabled())      # Zustand direkt beim System nachsehen
         self.no_report_input.setText(songlog.format_windows(songlog.no_report_windows()))
@@ -1034,6 +1073,7 @@ class SettingsDialog(QDialog):
         s.setValue("beamer_screen", self.screen_combo.currentIndex())
         s.setValue("fullscreen_mode", self.fullscreen_checkbox.isChecked())
         s.setValue("presentation_season", self.season_combo.currentData())
+        self.pause_settings.save()
         s.setValue(songlog.KEY_ENABLED, self.songlog_checkbox.isChecked())
         try:
             windows = songlog.parse_windows(self.no_report_input.text())
