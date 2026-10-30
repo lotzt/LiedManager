@@ -139,9 +139,9 @@ class SidePanel(QFrame):
         tabs = QHBoxLayout()
         tabs.setSpacing(8)
         entries = (
-            (w.ICON_CAMERA, cam_page, "Kamera", "Kamera\nLive-Kamerabilder anzeigen"),
+            (w.ICON_CAMERA, cam_page, "Kamera", "Kamera"),
             (w.ICON_IMAGES, images_page, "Bilder",
-             "Bilder\nAbgelegte Bilder anzeigen – Bilder oder Ordner einfach auf das Programm ziehen"),
+             "Bilder"),
         )
         for index, (svg, page, text, tooltip) in enumerate(entries):
             button = TabButton(svg, text, tooltip)
@@ -316,8 +316,7 @@ class SidePanel(QFrame):
         button = self.group.button(TAB_IMAGES)
         button.set_badge(count)
         button.setToolTip(
-            "Bilder\nAbgelegte Bilder anzeigen – Bilder oder Ordner einfach auf das Programm ziehen"
-            if not count else f"Bilder · {count}\nAbgelegte Bilder anzeigen"
+            f"Bilder · {count}" if count else "Bilder"
         )
 
     def _on_tab_clicked(self, index: int) -> None:

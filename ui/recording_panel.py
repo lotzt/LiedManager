@@ -46,7 +46,7 @@ class RecordingPanel(QFrame):
         self.preacher_input = QLineEdit()
         self.preacher_input.setPlaceholderText("Prediger")
         self.preacher_input.setFixedHeight(32)
-        self.preacher_input.setToolTip("Name des Predigers – steht im Dateinamen der Aufnahme (Datum Prediger)")
+        self.preacher_input.setToolTip("Prediger")
         self.preacher_input.setStyleSheet(
             t.input_style("QLineEdit", "0 10px", background=t.CARD_BG)
         )
@@ -55,12 +55,12 @@ class RecordingPanel(QFrame):
         self.rec_time_label = QLabel("00:00")
         self.rec_time_label.setMinimumWidth(44)
         self.rec_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.rec_time_label.setToolTip("Dauer der laufenden Aufnahme")
+        self.rec_time_label.setToolTip("Aufnahmedauer")
         row.addWidget(self.rec_time_label)
         middle.addLayout(row)
 
         self.level_meter = w.LevelMeter()
-        self.level_meter.setToolTip("Aussteuerung des Mikrofons (Pegel)")
+        self.level_meter.setToolTip("Pegel")
         middle.addWidget(self.level_meter)
         layout.addLayout(middle, 1)
 

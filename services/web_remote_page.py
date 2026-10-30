@@ -8,6 +8,7 @@ Die Seite wird in ``server/remote.php`` eingebaut (siehe ``tools/build_remote_si
 ``remote.php?api=…`` und das Anmelde-Token reist im Header ``X-LM-Token`` (manche Hoster reichen ``Authorization`` nicht
 an PHP weiter). Der Platzhalter ``__SELF__`` setzt remote.php beim Ausliefern selbst ein.
 """
+import json
 
 REQUIRED_VALUES = (
     "CARD_BG", "SURFACE", "SURFACE_LOW", "SURFACE_HOVER_TOP", "SURFACE_HOVER_BOTTOM", "SURFACE_PRESSED", "BORDER",
@@ -39,6 +40,13 @@ HTML = """<!doctype html>
 <meta name="viewport" content="width=420, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="__CARD_BG__">
 <title>LiedManager – Fernsteuerung</title>
+<meta name="application-name" content="LiedManager">
+<meta name="apple-mobile-web-app-title" content="LiedManager">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -144,7 +152,7 @@ HTML = """<!doctype html>
     </div>
     <div id="mixerCard" class="card" hidden>
       <div class="caption">Mischpult (X AIR) <span id="mixerState" class="chip" title="Verbindung zum Mischpult">…</span></div>
-      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Mischpult → „X AIR“ (IP-Adresse eintragen).</p>
+      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Audio → „Behringer X AIR“ (IP-Adresse eintragen).</p>
       <div id="mixerList"></div>
       <button id="mixerMuteAll" type="button" class="pill" title="Alle acht Kanäle stummschalten">Alles stumm</button>
     </div>
@@ -647,7 +655,7 @@ JS = r"""(function () {
     renderImages(s);
     renderCameras(s);
     renderPause(s.pause);
-    $('syncStatus').textContent = s.sync.enabled ? s.sync.status : 'Aus – im Programm unter Einstellungen → Datenbank einrichten.';
+    $('syncStatus').textContent = s.sync.enabled ? s.sync.status : 'Aus – im Programm unter Einstellungen → Lieder einrichten.';
     $('syncBtn').disabled = !s.sync.enabled;
     $('versionLabel').textContent = 'LiedManager ' + s.version;
   }
@@ -1082,12 +1090,28 @@ def build_assets(values: dict) -> dict:
 
     html, css, js = fill(HTML), fill(CSS), JS.replace("__RELAY__", "__SELF__")
     for old, new in (('href="/app.css"', 'href="__SELF__?asset=css"'), ('src="/app.js"', 'src="__SELF__?asset=js"'),
+                     ('href="/favicon-32.png"', 'href="__SELF__?asset=favicon"'),
+                     ('href="/icon-180.png"', 'href="__SELF__?asset=icon180"'),
+                     ('href="/manifest.webmanifest"', 'href="__SELF__?asset=manifest"'),
                      (LOGIN_HINT, LOGIN_HINT_HOSTED)):
         if old not in html:
             raise ValueError(f"Die Webseite hat sich geändert, ‚{old}‘ fehlt: build_assets anpassen.")
         html = html.replace(old, new)
+    # Logo für Lesezeichen, Browser-Tab und „Zum Home-Bildschirm“ (iPhone/Android); erzeugt aus ui/assets/logo.png
+    from paths import ASSETS_DIR
+    icons = {name: (ASSETS_DIR / "web" / name).read_bytes()
+             for name in ("favicon-32.png", "icon-180.png", "icon-192.png", "icon-512.png")}
+    manifest = json.dumps({
+        "name": "LiedManager – Fernsteuerung", "short_name": "LiedManager", "lang": "de",
+        "start_url": "__SELF__", "scope": "./", "display": "standalone",
+        "background_color": values["CARD_BG"], "theme_color": values["CARD_BG"],
+        "icons": [{"src": "__SELF__?asset=icon192", "sizes": "192x192", "type": "image/png"},
+                  {"src": "__SELF__?asset=icon512", "sizes": "512x512", "type": "image/png"}],
+    }, ensure_ascii=False, indent=1)
     return {
         "/": ("text/html; charset=utf-8", html.encode("utf-8")),
         "/app.css": ("text/css; charset=utf-8", css.encode("utf-8")),
         "/app.js": ("application/javascript; charset=utf-8", js.encode("utf-8")),
+        "/manifest.webmanifest": ("application/manifest+json", manifest.encode("utf-8")),
+        **{f"/{name}": ("image/png", data) for name, data in icons.items()},
     }

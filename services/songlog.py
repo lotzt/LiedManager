@@ -2,9 +2,9 @@
 
 Pro Tag steht eine Kopfzeile mit Wochentag und Datum („Sonntag, 18.10.2026“), darunter je Lied „Nummer – Titel“ (sonst nichts).
 Aufgenommen wird ein Lied, sobald es auf dem Beamer gezeigt wird. Dasselbe Lied direkt nacheinander steht nur einmal in der
-Liste. Im Testmodus (Einstellungen → Anzeige) wird nichts gespeichert.
+Liste. Im Testmodus wird nichts gespeichert.
 
-Lieder aus Zeiten ohne CCLI-Meldung (Einstellungen → Remote → CCLI-Meldung, Standard: sonntags 9–10 Uhr, mittwochs 18:30–19:30 Uhr)
+Lieder aus Zeiten ohne CCLI-Meldung (Einstellungen → Lieder → CCLI-Meldung, Standard: sonntags 9–10 Uhr, mittwochs 18:30–19:30 Uhr)
 stehen mit dem Zusatz „[nicht melden]“ in der Liste: Sie bleiben in der Liedhistorie, kommen aber nicht in die CCLI-Meldung.
 """
 import datetime

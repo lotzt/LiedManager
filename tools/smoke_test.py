@@ -996,10 +996,24 @@ def main() -> int:
 
     dialog = SettingsDialog(window)
     dialog.show()
-    for index, name in enumerate(("anzeige", "pausentimer", "audio", "kameras", "atem", "daten")):
+    for index, name in enumerate(("allgemein", "pausentimer", "lieder", "audio", "kamera", "remote")):
         dialog.tab_group.button(index).click()
         settle()
         dialog.grab().save(str(SHOTS / f"05_einstellungen_{name}.png"))
+    dialog.tab_group.button(1).click()
+    from PyQt6.QtWidgets import QButtonGroup as _QBG
+    subtabs = [g for g in dialog.pages.widget(1).findChildren(_QBG) if g.buttons()]
+    assert subtabs and len(subtabs[0].buttons()) == 5, "Pausentimer: Vorlage / Vorschau / Ablauf / Musik / Schrift"
+    for index in range(5):
+        subtabs[0].button(index).click()
+        settle()
+        dialog.grab().save(str(SHOTS / f"05_einstellungen_pausentimer_{index + 1}.png"))
+    dialog.tab_group.button(4).click()
+    settle()
+    assert abs(dialog.cam1_combo.width() - dialog.cam2_combo.width()) <= 1, "Kamera 1 und 2 müssen gleich breit sein"
+    dialog.tab_group.button(3).click()
+    settle()
+    assert abs(dialog.audio_device_combo.width() - dialog.mic_device_combo.width()) <= 1, "Ausgabe und Eingabe gleich breit"
     dialog.close()
 
     import time
@@ -1499,12 +1513,17 @@ def main() -> int:
     dialog = _SettingsDialog(window)
     assert not hasattr(dialog, "remote_checkbox"), "der lokale Webserver ist entfernt"
     tab_names = [dialog.tab_group.button(i).text() for i in range(len(dialog.tab_group.buttons()))]
-    assert tab_names == ["Anzeige", "Pausentimer", "Audio", "Kamera", "Mischpult", "Datenbank", "Remote", "Update"], tab_names
-    assert dialog.pages.widget(5).isAncestorOf(dialog.db_path_input) and dialog.pages.widget(5).isAncestorOf(dialog.sync_url_input)
-    assert dialog.pages.widget(7).isAncestorOf(dialog.update_checkbox)
-    assert not dialog.pages.widget(5).isAncestorOf(dialog.site_checkbox), "Remote gehört in den Reiter „Remote“"
-    assert dialog.pages.widget(1).isAncestorOf(dialog.open_presentations_btn), "Pausenfolien-Ordner gehört zur Pausentimer-Vorlage"
-    assert dialog.pages.widget(6).isAncestorOf(dialog.site_url_input)
+    assert tab_names == ["Allgemein", "Pausentimer", "Lieder", "Audio", "Kamera", "Remote"], tab_names
+    page = dialog.pages.widget
+    assert page(0).isAncestorOf(dialog.update_checkbox) and page(0).isAncestorOf(dialog.autostart_checkbox)
+    assert page(0).isAncestorOf(dialog.screen_combo)
+    assert page(1).isAncestorOf(dialog.open_presentations_btn), "Pausenfolien-Ordner gehört zur Pausentimer-Vorlage"
+    assert page(2).isAncestorOf(dialog.db_path_input) and page(2).isAncestorOf(dialog.sync_url_input)
+    assert page(2).isAncestorOf(dialog.songlog_checkbox) and page(2).isAncestorOf(dialog.ccli_report_btn)
+    assert page(3).isAncestorOf(dialog.rec_path_input) and page(3).isAncestorOf(dialog.wp_checkbox)
+    assert page(3).isAncestorOf(dialog.xair_ip_input)
+    assert page(4).isAncestorOf(dialog.cam1_combo) and page(4).isAncestorOf(dialog.atem_ip_input)
+    assert page(5).isAncestorOf(dialog.site_url_input) and not page(2).isAncestorOf(dialog.site_checkbox)
     for key in LEGACY_KEYS:                                   # alte Einstellungen (auch die PIN im Klartext) werden entfernt
         app_settings().setValue(key, "alt")
     window.remote.configure()

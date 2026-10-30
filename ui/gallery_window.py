@@ -36,7 +36,7 @@ class GalleryWindow(ImagePresentationWindow):
     """Zeigt die Bilder der Ablage einzeln im Vollbild auf dem Beamer-Bildschirm.
 
     Bedienung:  Klick / Pfeil rechts / Leertaste / Bild-ab = weiter · Rechtsklick / Pfeil links / Bild-auf = zurück
-                Esc / Q / Schließen-Button = beenden.
+                Esc = beenden (nur Esc, damit nichts versehentlich schließt).
     Die Bedienelemente erscheinen nur, solange die Maus bewegt wird – für das Publikum bleibt das Bild sauber.
     """
     close_requested = pyqtSignal()
@@ -186,7 +186,8 @@ class GalleryWindow(ImagePresentationWindow):
 
     def _controls(self):
         multiple = len(self._paths) > 1
-        return [(self._close_btn, True), (self._prev_btn, multiple),
+        # Schließen-Knopf bleibt aus: geschlossen wird nur mit Esc
+        return [(self._close_btn, False), (self._prev_btn, multiple),
                 (self._next_btn, multiple), (self._page_label, multiple)]
 
     def _update_controls(self) -> None:
@@ -253,7 +254,7 @@ class GalleryWindow(ImagePresentationWindow):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+        if key in (Qt.Key.Key_Escape,):
             self.close_requested.emit()
         elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down, Qt.Key.Key_Space, Qt.Key.Key_PageDown,
                      Qt.Key.Key_Return, Qt.Key.Key_Enter):

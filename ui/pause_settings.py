@@ -1,4 +1,4 @@
-"""Einstellungen der Pausenfolie (Teil von Einstellungen → Anzeige).
+"""Einstellungen der Pausenfolie (Reiter Einstellungen → Pausentimer).
 
 Art (ohne PowerPoint / PowerPoint), Jahreszeit, Vorlage übernehmen, Vorschau, Bibelvers, Ablauf, Musik sowie Text, Schrift,
 Größe und Farbe jeder Text-Ebene. Gespeichert wird im Design der Jahreszeit (``services/pausenfolie.py``).
@@ -45,15 +45,12 @@ class PauseSettings(QObject):
         self.mode_combo = d._combo()
         for key, label in MODES:
             self.mode_combo.addItem(label, key)
-        self.mode_combo.setToolTip("Ohne PowerPoint: LiedManager zeigt die Pausenfolie selbst (schnell, kein Fremdfenster).\n"
-                                   "PowerPoint: wie bisher über die PowerPoint-Vorlage.")
+        self.mode_combo.setToolTip("Ohne PowerPoint: schnell, kein Fremdfenster")
         self.import_btn = d._outline_button("Vorlage übernehmen …")
-        self.import_btn.setToolTip("Liest die Vorlage dieser Jahreszeit ein: Bilder, Texte, Schriften, Farben, Bibelvers und Musik.\n"
-                                   "Weiter in PowerPoint gestalten und danach einfach erneut übernehmen.")
+        self.import_btn.setToolTip("Vorlage einlesen · nach Änderungen erneut")
         self.import_btn.clicked.connect(self.import_template)
         self.media_btn = d._outline_button("Bilder-Ordner")
-        self.media_btn.setToolTip("Hier liegen die Bilder der Pausenfolie. Eine Datei durch eine gleichnamige ersetzen,\n"
-                                  "dann erscheint das neue Bild (z. B. ein anderes Foto).")
+        self.media_btn.setToolTip("Bild ersetzen: gleicher Dateiname")
         self.media_btn.clicked.connect(self.open_media_folder)
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -82,11 +79,11 @@ class PauseSettings(QObject):
 
         self.verse_minutes = d._spinbox(0, 60)
         self.verse_minutes.setSuffix(" min")
-        self.verse_minutes.setToolTip("So viele Minuten vor Pausenende erscheint der Bibelvers (0 = nie)")
+        self.verse_minutes.setToolTip("Minuten vor Pausenende (0 = nie)")
         self.countdown_seconds = d._spinbox(5, 300)
         self.countdown_seconds.setSuffix(" s")
-        self.countdown_seconds.setToolTip("So lange läuft der Countdown am Ende der Pause")
-        self.pulse_checkbox = d._checkbox("Zahl pulsiert leicht bei jedem Sekundenwechsel (aus = wie in PowerPoint)")
+        self.countdown_seconds.setToolTip("Dauer des Countdowns")
+        self.pulse_checkbox = d._checkbox("Countdown-Zahl pulsiert (aus = wie in PowerPoint)")
 
         self.music_label = QLabel()
         self.music_label.setStyleSheet(f"color: {t.TEXT_LABEL}; font-size: {t.FS}px;")
@@ -97,7 +94,7 @@ class PauseSettings(QObject):
         self.no_music_btn.clicked.connect(self.remove_music)
         self.music_start = d._spinbox(0, 300)
         self.music_start.setSuffix(" s")
-        self.music_start.setToolTip("So viele Sekunden vor Pausenende setzt die Musik ein")
+        self.music_start.setToolTip("Sekunden vor Pausenende")
         self.music_volume = d._spinbox(0, 100)
         self.music_volume.setSuffix(" %")
 
@@ -141,43 +138,43 @@ class PauseSettings(QObject):
 
     # ------------------------------------------------------------------
     def cards(self) -> list:
+        """Unter-Reiter des Pausentimers: (Name, Karten …)."""
         d = self.dialog
         buttons = QHBoxLayout()
         buttons.setSpacing(t.GAP)
         buttons.addWidget(self.import_btn, 1)
         buttons.addWidget(d.open_presentations_btn, 1)
         buttons.addWidget(self.media_btn, 1)
-        preview_row = QHBoxLayout()
-        preview_row.addWidget(self.preview_btn)
-        preview_row.addStretch(1)
-        times = d._two_fields(d._field("Bibelvers ab", self.verse_minutes), d._field("Countdown", self.countdown_seconds))
-        music_buttons = QHBoxLayout()
-        music_buttons.setSpacing(t.GAP)
-        music_buttons.addWidget(self.music_btn)
-        music_buttons.addWidget(self.no_music_btn)
-        music_buttons.addStretch(1)
-        music_values = d._two_fields(d._field("Musik ab", self.music_start), d._field("Lautstärke", self.music_volume))
-        return [
-            d._card(d._two_fields(d._field("Pausenfolie", self.mode_combo), d._field("Jahreszeit", d.season_combo)),
-                    buttons, self.status_label, self.preview_box, preview_row,
-                    title="Pausenfolie",
-                    info="Ohne PowerPoint zeigt LiedManager die Pausenfolie selbst – gestaltet wie deine PowerPoint-Vorlage "
-                         "„pausentimer_<Jahreszeit>.pptx“ (einmal übernehmen). Ansagen ändern sich sofort auf dem Beamer."),
-            d._card(d._field("Bibelvers", self.verse_edit), d._field("Stelle", self.reference_edit), times,
-                    self.pulse_checkbox,
-                    title="Pausenfolie: Bibelvers & Ablauf",
-                    info="Bis zur Bibelvers-Zeit stehen die Ansagen auf dem Beamer, danach der Bibelvers, am Ende der Countdown."),
-            d._card(self.music_label, music_buttons, music_values,
-                    title="Pausenfolie: Musik",
-                    info="Die Musik aus der Vorlage (oder eine eigene MP3) setzt kurz vor Pausenende ein – über die Audio-Ausgabe "
-                         "aus Einstellungen → Audio."),
-            d._card(self.text_grid,
-                    title="Pausenfolie: Schrift",
-                    info="Text, Schriftart, Größe (in Pixeln einer 1920 × 1080-Folie) und Farbe jeder Text-Ebene. "
-                         "Fehlt eine Schrift auf diesem Rechner, nimmt das Programm Arial."),
+        preview_head = QHBoxLayout()
+        preview_head.addStretch(1)
+        preview_head.addWidget(self.preview_btn)
+        times = d._two_fields(d._field("Bibelvers ab", self.verse_minutes), d._field("Countdown", self.countdown_seconds),
+                              equal=True)
+        music_row = QHBoxLayout()                      # Knöpfe und Werte in einer Reihe
+        music_row.setSpacing(t.GAP)
+        music_row.addWidget(self.music_btn, 0, Qt.AlignmentFlag.AlignBottom)
+        music_row.addWidget(self.no_music_btn, 0, Qt.AlignmentFlag.AlignBottom)
+        music_row.addStretch(1)
+        music_row.addWidget(d._field("Musik ab", self.music_start))
+        music_row.addWidget(d._field("Lautstärke", self.music_volume))
+        return [                                       # kleine Unter-Reiter: jede Seite passt ohne Scrollen
+            ("Vorlage",
+             d._card(d._two_fields(d._field("Pausenfolie", self.mode_combo), d._field("Jahreszeit", d.season_combo),
+                                   equal=True),
+                     buttons, self.status_label,
+                     title="Vorlage",
+                     info="Ohne PowerPoint zeigt LiedManager die Folie selbst – die Vorlage einmal übernehmen.")),
+            ("Vorschau", d._card(preview_head, self.preview_box, title="Vorschau")),
+            ("Ablauf",
+             d._card(self.verse_edit, d._field("Stelle", self.reference_edit), title="Bibelvers"),
+             d._card(times, self.pulse_checkbox, title="Ablauf",
+                     info="Erst Ansagen, dann Bibelvers, am Ende Countdown.")),
+            ("Musik", d._card(self.music_label, music_row, title="Musik", info="Setzt kurz vor Pausenende ein.")),
+            ("Schrift",
+             d._card(self.text_grid, title="Schrift",
+                     info="Größe in Pixeln einer 1920 × 1080-Folie. Fehlt eine Schrift, gilt Arial.")),
         ]
 
-    # ------------------------------------------------------------------
     def load(self) -> None:
         index = self.mode_combo.findData(pause_mode())
         self.mode_combo.setCurrentIndex(max(0, index))

@@ -347,7 +347,7 @@ class PauseWindow(QWidget):
         painter.end()
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+        if event.key() in (Qt.Key.Key_Escape,):
             self.escape_pressed.emit()
         else:
             super().keyPressEvent(event)
@@ -422,7 +422,7 @@ class NativePausentimer(QObject):
         self._music_started = False
         screen_index = app_settings().value("beamer_screen", 0, type=int)
         self._window = PauseWindow(PauseRenderer(design), screen_index)
-        self._window.escape_pressed.connect(self.stop)
+        # Esc beendet die Pause bewusst nicht – nur der Knopf (oder die Remote), damit sie nicht versehentlich endet
         self._window.texts = self._texts               # Ansagen gleich beim Start (nicht erst beim nächsten Wechsel)
         self._running = True
         atem.switch("presentation")

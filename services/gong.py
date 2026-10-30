@@ -40,3 +40,14 @@ class Gong(QObject):
         self._player.setPosition(0)
         self._player.play()
         return True
+
+    @property
+    def playing(self) -> bool:
+        return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+
+    def toggle(self) -> bool:
+        """Gong-Knopf: ein Klick schlägt an, ein Klick während des Klangs beendet ihn."""
+        if self.playing:
+            self._player.stop()
+            return True
+        return self.play()

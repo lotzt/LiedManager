@@ -230,8 +230,8 @@ class ImagePresentationWindow(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
-        """ESC (oder Q) wird an das Hauptfenster weitergeleitet."""
-        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+        """Esc wird an das Hauptfenster weitergeleitet (schließen nur mit Esc)."""
+        if event.key() in (Qt.Key.Key_Escape,):
             if self.main_window:
                 self.main_window.handle_escape()
             else:

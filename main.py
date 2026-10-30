@@ -81,14 +81,14 @@ def main() -> int:
             QMessageBox.information(
                 window, "Datenbank fehlt",
                 f"Die in den Einstellungen gewählte Datenbank wurde nicht gefunden:\n{chosen}\n\n"
-                "Bitte wähle unter Einstellungen → Datenbank eine andere Datenbank aus.",
+                "Bitte wähle unter Einstellungen → Lieder eine andere Datenbank aus.",
             )
         else:
             QMessageBox.information(
                 window, "Datenbank fehlt",
                 "Die Datenbank „LiedManager.db“ wurde nicht gefunden.\n\n"
                 f"Bitte kopiere sie in diesen Ordner und starte das Programm neu:\n{user_data_dir()}\n\n"
-                "Oder wähle sie unter Einstellungen → Datenbank aus.",
+                "Oder wähle sie unter Einstellungen → Lieder aus.",
             )
     return app.exec()
 

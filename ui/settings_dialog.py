@@ -7,7 +7,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from paths import custom_pausentimer_dir, default_db_path
@@ -75,15 +75,79 @@ class SettingsDialog(QDialog):
         return box
 
     @staticmethod
-    def _two_fields(*fields: QWidget) -> QWidget:
-        """Mehrere Felder nebeneinander in einer Zeile (spart Platz); das erste ist etwas breiter."""
+    def _two_fields(*fields: QWidget, equal: bool = False) -> QWidget:
+        """Mehrere Felder nebeneinander in einer Zeile (spart Platz); das erste ist etwas breiter.
+        ``equal``: alle Felder exakt gleich breit (z. B. Kamera 1/2, Ausgabe/Mikrofon)."""
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(t.GAP)
         for index, field in enumerate(fields):
-            layout.addWidget(field, 3 if index == 0 else 2)
+            if equal:
+                field.setMinimumWidth(0)
+                field.setSizePolicy(QSizePolicy.Policy.Ignored, field.sizePolicy().verticalPolicy())
+            layout.addWidget(field, 1 if equal else (3 if index == 0 else 2))
         return row
+
+    @staticmethod
+    def _inline(field: QWidget, *widgets: QWidget) -> QWidget:
+        """Feld mit Beschriftung und daneben (auf Höhe des Felds) weitere Elemente, z. B. ein Schalter."""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(t.GAP * 2)
+        layout.addWidget(field)
+        for widget in widgets:
+            widget.setFixedHeight(FIELD_H)
+            layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignBottom)
+        layout.addStretch(1)
+        return row
+
+    @staticmethod
+    def _device_combo() -> QComboBox:
+        """Auswahlliste für Geräte: lange Gerätenamen werden gekürzt statt das Feld zu verbreitern."""
+        combo = SettingsDialog._combo()
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(8)
+        combo.setProperty("no_fit", True)
+        return combo
+
+    @staticmethod
+    def _subtabs(*entries) -> QWidget:
+        """Unterteilt eine lange Seite in kleine Unter-Reiter (Name, Karten …)."""
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        stack = QStackedWidget()
+        group = QButtonGroup(box)
+        group.setExclusive(True)
+        for index, (label, *cards) in enumerate(entries):
+            btn = QPushButton(label.replace("&", "&&"))   # „&“ sonst als Tastenkürzel (Unterstrich) gedeutet
+            btn.setCheckable(True)
+            btn.setFixedHeight(30)
+            btn.setAutoDefault(False)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(t.pill_button_style(radius=15, font_size=12) + "QPushButton { padding: 0 12px; }")
+            group.addButton(btn, index)
+            row.addWidget(btn)
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            page_layout.setSpacing(14)
+            for card in cards:
+                page_layout.addWidget(card)
+            page_layout.addStretch()
+            stack.addWidget(page)
+        row.addStretch()
+        group.idClicked.connect(stack.setCurrentIndex)
+        group.button(0).setChecked(True)
+        box.subtab_group = group                   # für Tests
+        layout.addLayout(row)
+        layout.addWidget(stack)
+        return box
 
     @staticmethod
     def _info_button(text: str) -> QToolButton:
@@ -212,15 +276,26 @@ class SettingsDialog(QDialog):
         self.pages = QStackedWidget()
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
+        display = self.create_display_tab()
+        pause = self.create_pause_tab()
+        audio = self.create_audio_tab()
+        cameras = self.create_camera_tab()
+        mixer = self.create_atem_tab()
+        data = self.create_data_tab()
+        remote = self.create_remote_tab()
+        update_items = self.create_update_tab()
+        program = self._card(self.autostart_checkbox, *update_items, title="Programm")
+        recordings = self._card(audio["path"], *remote["upload"], title="Aufnahmen",
+                                info="Speicherort der WAV-Dateien. Hochladen: WordPress-Benutzer ab Rolle „Autor“; "
+                                     "mit ffmpeg wird vorher eine kleine MP3 erstellt.")
         entries = (
-            ("Anzeige", self.create_display_tab()),
-            ("Pausentimer", self.create_pause_tab()),
-            ("Audio", self.create_audio_tab()),
-            ("Kamera", self.create_camera_tab()),
-            ("Mischpult", self.create_atem_tab()),
-            ("Datenbank", self.create_data_tab()),
-            ("Remote", self.create_remote_tab()),
-            ("Update", self.create_update_tab()),
+            ("Allgemein", self._page(program, display["beamer"])),
+            ("Pausentimer", self._page(self._subtabs(*pause))),
+            ("Lieder", self._page(self._subtabs(("Datenbank", data["db"], data["sync"]),
+                                                ("Gespielte Lieder", display["songlog"], remote["ccli"])))),
+            ("Audio", self._page(audio["devices"], recordings, mixer["xair"])),
+            ("Kamera", self._page(cameras, mixer["atem"])),
+            ("Remote", self._page(remote["remote"])),
         )
         for index, (label, page) in enumerate(entries):
             btn = QPushButton(label)
@@ -285,6 +360,8 @@ class SettingsDialog(QDialog):
             need = max(width_of(spin, text) for text in texts) + 12 + 34 + 24   # Innenabstand + Pfeile + Luft
             spin.setFixedWidth(max(spin.width(), need))
         for combo in self.findChildren(QComboBox):
+            if combo.property("no_fit"):               # Gerätelisten: gleich breite Felder, lange Namen gekürzt
+                continue
             if isinstance(combo, QFontComboBox):        # Schriftlisten: feste, bequeme Breite (sonst sehr breit)
                 continue
             widest = max((width_of(combo, combo.itemText(i)) for i in range(combo.count())), default=0)
@@ -297,7 +374,7 @@ class SettingsDialog(QDialog):
                 edit.setMinimumWidth(min(280, max(edit.minimumWidth(), width_of(edit, text) + 24 + 16)))   # nicht breiter als die Seite
 
     def _fit_height(self) -> None:
-        """Macht den Dialog so hoch, dass die höchste Seite (Datenbank) ganz zu sehen ist und nicht gescrollt werden muss.
+        """Macht den Dialog so hoch, dass die höchste Seite ganz zu sehen ist und nicht gescrollt werden muss.
         Nur auf sehr kleinen Bildschirmen wird gekürzt – dann greift die Bildlauf-Fläche."""
         width = self.width() - 48
         need = 0
@@ -313,80 +390,65 @@ class SettingsDialog(QDialog):
     def create_display_tab(self):
         self.screen_combo = self._combo()
         self.populate_screens()
-        self.fullscreen_checkbox = self._checkbox("Präsentationen im rahmenlosen Vollbild starten")
+        self.fullscreen_checkbox = self._checkbox("Im Vollbild zeigen")
         self.fullscreen_checkbox.setChecked(True)
-        self.screen_combo.setToolTip("Auf diesem Bildschirm erscheinen Beamer-Bild und Kamera-Vollbild")
-        self.fullscreen_checkbox.setToolTip("Aus: das Beamer-Bild öffnet sich als normales, verschiebbares Fenster")
+        self.screen_combo.setToolTip("Bildschirm für Beamer und Kamera-Vollbild")
+        self.fullscreen_checkbox.setToolTip("Aus: normales Fenster")
 
         self.season_combo = self._combo()
         for label, key in (("Frühling", "frühling"), ("Sommer", "sommer"),
                            ("Herbst", "herbst"), ("Winter", "winter")):
             self.season_combo.addItem(label, key)
-        self.season_combo.setToolTip("Welche Pausenfolie (PowerPoint-Vorlage) der Pausentimer verwendet\n"
-                                     "Genutzt wird die Datei „pausentimer_<Jahreszeit>.pptx“")
+        self.season_combo.setToolTip("Welche Pausenfolie gilt")
         self.open_presentations_btn = self._outline_button("Vorlagen-Ordner")
         self.open_presentations_btn.clicked.connect(self.open_presentation_folder)
-        self.open_presentations_btn.setToolTip(
-            "Öffnet den Ordner für deine Pausenfolien im Datei-Manager\n"
-            "Hier liegen die Dateien „pausentimer_<Jahreszeit>.pptx“ (Vorlagen werden nicht mitgeliefert)")
+        self.open_presentations_btn.setToolTip("Ordner der Pausenfolien öffnen")
 
-        self.songlog_checkbox = self._checkbox("Gespielte Lieder in einer Textdatei speichern")
-        self.songlog_checkbox.setToolTip(
-            "Jedes Lied, das auf dem Beamer gezeigt wird, kommt mit Nummer und Titel in die Datei „Gespielte Lieder.txt“ (nach Datum geordnet)")
+        self.songlog_checkbox = self._checkbox("Gespielte Lieder speichern")
+        self.songlog_checkbox.setToolTip("Jedes gezeigte Lied wird gespeichert")
         self.history_btn = self._outline_button("Liedhistorie")
-        self.history_btn.setToolTip("Zeigt die gespielten Lieder nach Tag, mit Suche und den am häufigsten gespielten")
+        self.history_btn.setToolTip("Gespielte Lieder anzeigen")
         self.history_btn.clicked.connect(self.show_history)
         self.ccli_report_btn = self._outline_button("Bei CCLI melden")
-        self.ccli_report_btn.setToolTip(
-            "Öffnet CCLI „Suchen & Melden“ (reporting.ccli.com) in einem Browser, du loggst dich dort ein. Danach gibt das Programm\n"
-            "jede CCLI-Nummer ein, sucht und klickt „Lied melden“. Nach dem ersten Lied fragt es, ob alles stimmt.\n"
-            "Die Meldeliste (nur CCLI-Nummern) entsteht dabei automatisch aus den gespielten Liedern. Lieder aus den Zeiten\n"
-            "unter „Nicht melden“ werden übersprungen. Gemeldetes wird nicht aufbewahrt.")
+        self.ccli_report_btn.setToolTip("Gespielte Lieder bei CCLI melden")
         self.ccli_report_btn.clicked.connect(self.start_ccli_report)
         self.no_report_input = self._line_edit("z. B. So 09:00–10:00; Mi 18:30–19:30")
-        self.no_report_input.setToolTip(
-            "In diesen Zeiten gezeigte Lieder bleiben in der Liedhistorie, werden aber nicht bei CCLI gemeldet.\n"
-            "Mehrere Zeiten mit „;“ trennen. Wochentage: Mo, Di, Mi, Do, Fr, Sa, So. Leer = alles melden.")
+        self.no_report_input.setToolTip("Mehrere Zeiten mit „;“ trennen · leer = alles melden")
         self.ccli_status_label = QLabel()
         self.ccli_status_label.setWordWrap(True)
         self.ccli_status_label.setStyleSheet(t.hint_style())
         self.ccli_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._show_ccli_pending()                      # wie die anderen Statuszeilen: nie leer
 
-        self.autostart_checkbox = self._checkbox("LiedManager beim Anmelden am Computer automatisch starten")
-        self.autostart_checkbox.setToolTip(
-            "Startet das Programm automatisch, sobald du dich an diesem Computer anmeldest (nur für deinen Benutzer).\n"
-            "Windows: Autostart-Eintrag · Mac: Anmeldeobjekt (LaunchAgent)")
+        self.autostart_checkbox = self._checkbox("Beim Anmelden automatisch starten")
+        self.autostart_checkbox.setToolTip("Startet beim Anmelden am Computer")
         self.autostart_checkbox.setVisible(autostart.supported())
 
-        return self._page(
-            self._card(self.autostart_checkbox, title="Programmstart",
-                       info="Ob LiedManager beim Anmelden am Computer von selbst startet."),
-            self._card(
-                self._field("Bildschirm", self.screen_combo),
-                self.fullscreen_checkbox,
-                title="Beamer", info="Auf diesem Bildschirm (Zweitmonitor) erscheinen Beamer-Bild und Kamera-Vollbild.",
-            ),
-            self._card(self.songlog_checkbox, self.history_btn,
-                       title="Gespielte Lieder",
-                       info="Jedes gezeigte Lied kommt mit Nummer und Titel in die Liste. Daraus entsteht die CCLI-Meldung (Reiter Remote)."),
-        )
+        history_row = QHBoxLayout()
+        history_row.addWidget(self.history_btn)
+        history_row.addStretch(1)
+        return {
+            "beamer": self._card(self._inline(self._field("Bildschirm", self.screen_combo), self.fullscreen_checkbox),
+                                 title="Beamer"),
+            "songlog": self._card(self.songlog_checkbox, history_row, title="Gespielte Lieder",
+                                  info="Grundlage für die CCLI-Meldung."),
+        }
 
     def create_pause_tab(self):
         """Eigener Reiter: Pausenfolie (Art, Jahreszeit, Vorlage, Vorschau, Bibelvers, Ablauf, Musik, Schrift)."""
         from ui.pause_settings import PauseSettings
         self.pause_settings = PauseSettings(self)
-        return self._page(*self.pause_settings.cards())
+        return self.pause_settings.cards()
 
     def create_atem_tab(self):
         self.atem_enabled_checkbox = self._checkbox("Automatisch ansteuern")
 
-        self.atem_enabled_checkbox.setToolTip("Schaltet den Mischer bei Präsentation, Pausentimer und Kameras automatisch um")
+        self.atem_enabled_checkbox.setToolTip("Mischer automatisch umschalten")
         self.atem_ip_input = self._line_edit("z. B. 192.168.10.240")
-        self.atem_ip_input.setToolTip("Netzwerk-Adresse des ATEM Mischers")
+        self.atem_ip_input.setToolTip("IP-Adresse des Mischers")
         self.atem_test_btn = self._outline_button("Verbindung testen")
         self.atem_test_btn.clicked.connect(self.test_atem_connection)
-        self.atem_test_btn.setToolTip("Prüft, ob der Mischer unter dieser Adresse erreichbar ist")
+        self.atem_test_btn.setToolTip("Verbindung prüfen")
         ip_row = QHBoxLayout()
         ip_row.setSpacing(t.GAP)
         ip_row.addWidget(self.atem_ip_input, 1)
@@ -408,10 +470,10 @@ class SettingsDialog(QDialog):
         self.atem_default_spin = self._spinbox()
         self.atem_start_spin = self._spinbox(0, 20)
         self.atem_start_spin.setSpecialValueText("Schwarz")          # 0 = Schwarzbild (Black) des Mischers
-        self.atem_start_spin.setToolTip("Darauf schaltet der Mischer, sobald LiedManager startet (0 = Schwarz)")
-        self.atem_pres_spin.setToolTip("Mischer-Eingang für Beamer-Bild und Pausentimer")
-        self.atem_cam_spin.setToolTip("Mischer-Eingang für die Kamera-Bilder")
-        self.atem_default_spin.setToolTip("Mischer-Eingang, auf den beim Beenden zurückgeschaltet wird")
+        self.atem_start_spin.setToolTip("Beim Programmstart")
+        self.atem_pres_spin.setToolTip("Beamer-Bild und Pausentimer")
+        self.atem_cam_spin.setToolTip("Kamerabilder")
+        self.atem_default_spin.setToolTip("Nach dem Schließen")
         grid = QGridLayout()
         grid.setHorizontalSpacing(t.GAP)
         grid.setVerticalSpacing(10)
@@ -437,39 +499,33 @@ class SettingsDialog(QDialog):
         first_items += [ip_box, self.atem_status_label]
 
         self.xair_enabled_checkbox = self._checkbox("Über die Webseite steuern")
-        self.xair_enabled_checkbox.setToolTip("Lauter, leiser und Mute für die Kanäle 1 bis 8 – in der Web-Fernsteuerung im Reiter „Kamera“")
+        self.xair_enabled_checkbox.setToolTip("Kanäle 1–8 in der Web-Fernsteuerung")
         self.xair_ip_input = self._line_edit("z. B. 192.168.10.50")
-        self.xair_ip_input.setToolTip("Netzwerk-Adresse des Pults (im X AIR Edit unter Setup → Network, am besten fest vergeben)")
+        self.xair_ip_input.setToolTip("IP-Adresse des Pults")
 
-        return self._page(
-            self._card(*first_items, title="ATEM-Mischer",
-                       info="Schaltet den Mischer bei Präsentation, Pausentimer und Kameras automatisch um."),
-            self._card(grid, title="ATEM-Eingänge", info="Welcher Mischer-Eingang für welchen Zweck gilt."),
-            self._card(self.xair_enabled_checkbox, self._field("IP-Adresse", self.xair_ip_input), title="Behringer X AIR",
-                       info="Lauter, leiser, Mute und „Alles stumm“ für die Kanäle 1–8 in der Web-Fernsteuerung. "
-                            "Das Pult muss im selben Netzwerk sein. Erste Versuche bitte bei leiser Anlage."),
-        )
+        inputs_caption = QLabel("Eingänge")
+        inputs_caption.setStyleSheet(t.caption_style())
+        return {
+            "atem": self._card(*first_items, inputs_caption, grid, title="ATEM-Mischer"),   # Verbindung und Eingänge in einer Karte
+            "xair": self._card(self.xair_enabled_checkbox, self._field("IP-Adresse", self.xair_ip_input), title="Behringer X AIR",
+                               info="Lauter, leiser und Mute für die Kanäle 1–8 in der Web-Fernsteuerung."),
+        }
 
     def create_camera_tab(self):
-        self.cam1_combo = self._combo()
-        self.cam2_combo = self._combo()
+        self.cam1_combo = self._device_combo()
+        self.cam2_combo = self._device_combo()
         self.populate_video_devices()
-        self.cam1_combo.setToolTip("Videoquelle für das obere Kamerabild")
-        self.cam2_combo.setToolTip("Videoquelle für das untere Kamerabild")
-        return self._page(
-            self._card(
-                self._field("Kamera 1", self.cam1_combo),
-                self._field("Kamera 2", self.cam2_combo),
-                title="Kameras", info="Videoquelle für das obere und das untere Kamerabild.",
-            ),
-        )
+        self.cam1_combo.setToolTip("Oberes Kamerabild")
+        self.cam2_combo.setToolTip("Unteres Kamerabild")
+        return self._card(self._two_fields(self._field("Kamera 1 (oben)", self.cam1_combo),
+                                           self._field("Kamera 2 (unten)", self.cam2_combo), equal=True), title="Kameras")
 
     def create_audio_tab(self):
-        self.audio_device_combo = self._combo()
-        self.mic_device_combo = self._combo()
+        self.audio_device_combo = self._device_combo()
+        self.mic_device_combo = self._device_combo()
         self.populate_audio_devices()
-        self.audio_device_combo.setToolTip("Hierüber werden Piano und GL3 abgespielt (Systemstandard = normale Ausgabe)")
-        self.mic_device_combo.setToolTip("Mikrofon für die Aufnahme (Systemstandard = normales Mikrofon)")
+        self.audio_device_combo.setToolTip("Für Piano und GL3")
+        self.mic_device_combo.setToolTip("Für Aufnahmen")
 
         default_dir = os.path.join(
             QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation),
@@ -478,7 +534,7 @@ class SettingsDialog(QDialog):
         self.rec_path_input = self._line_edit(default_dir)
         self.rec_path_browse_btn = self._outline_button("Durchsuchen …")
         self.rec_path_browse_btn.clicked.connect(self.browse_recording_path)
-        self.rec_path_input.setToolTip("Ordner, in dem fertige Aufnahmen als WAV-Datei gespeichert werden")
+        self.rec_path_input.setToolTip("Ordner für die Aufnahmen")
         self.rec_path_browse_btn.setToolTip("Ordner auswählen")
         path_row = QHBoxLayout()
         path_row.setSpacing(t.GAP)
@@ -493,39 +549,28 @@ class SettingsDialog(QDialog):
         path_layout.addWidget(path_caption)
         path_layout.addLayout(path_row)
 
-        return self._page(
-            self._card(
-                self._field("Ausgabe (Soundkarte / PA)", self.audio_device_combo),
-                self._field("Mikrofon (Aufnahme)", self.mic_device_combo),
-                title="Audio", info="Über die Ausgabe laufen Piano und GL3. „Systemstandard“ = normale Ausgabe bzw. normales Mikrofon.",
-            ),
-            self._card(path_box, title="Aufnahmen", info="In diesem Ordner werden fertige Aufnahmen als WAV-Datei gespeichert."),
-        )
+        return {
+            "devices": self._card(self._two_fields(self._field("Ausgabe (Piano, GL3)", self.audio_device_combo),
+                                                   self._field("Eingabe (Mikrofon)", self.mic_device_combo), equal=True),
+                                  title="Audio", info="„Systemstandard“ = normales Gerät des Computers."),
+            "path": path_box,               # kommt in die Karte „Aufnahmen“ (zusammen mit dem Hochladen)
+        }
 
     def _build_sync_card(self) -> QFrame:
-        """Abgleich der Datenbank mit dem eigenen Server (gehört in den Reiter „Datenbank“)."""
-        self.sync_auto_checkbox = self._checkbox("Automatisch abgleichen (beim Start und jede Minute)")
-        self.sync_auto_checkbox.setToolTip(
-            "Ein: Änderungen werden automatisch gesendet und geholt.\n"
-            "Aus: die Verbindung bleibt eingerichtet, es wird aber nur auf Knopfdruck abgeglichen\n"
-            "(Jetzt abgleichen / Alles neu hochladen).")
+        """Abgleich der Datenbank mit dem eigenen Server (Reiter „Lieder“)."""
+        self.sync_auto_checkbox = self._checkbox("Automatisch abgleichen (jede Minute)")
+        self.sync_auto_checkbox.setToolTip("Aus: nur per Knopf")
         self.sync_auto_checkbox.toggled.connect(self._sync_auto_toggled)
         self.sync_url_input = self._line_edit("https://deine-domain.de/sync/sync.php")
-        self.sync_url_input.setToolTip(
-            "Adresse der Datei sync.php auf deinem Server (muss mit https:// beginnen).\n"
-            "Auf allen Geräten dieselbe Adresse und dasselbe Token eintragen.\n"
-            "Beim ersten Mal gilt der aktuelle Stand als Ausgangspunkt.")
+        self.sync_url_input.setToolTip("Adresse von sync.php")
         self.sync_token_input = self._line_edit("Token (steht in sync.php)")
         self.sync_token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sync_token_input.setToolTip("Das geheime Token aus der Datei sync.php auf dem Server. Auf allen Geräten gleich.")
+        self.sync_token_input.setToolTip("Token aus sync.php")
         self.sync_now_btn = self._outline_button("Jetzt abgleichen")
-        self.sync_now_btn.setToolTip("Sendet eigene Änderungen und holt die der anderen Geräte – im Hintergrund")
+        self.sync_now_btn.setToolTip("Änderungen senden und holen")
         self.sync_now_btn.clicked.connect(self._sync_now_clicked)
         self.sync_force_btn = self._outline_button("Alles neu hochladen")
-        self.sync_force_btn.setToolTip(
-            "Macht die Datenbank auf diesem Gerät zum verbindlichen Stand für alle Geräte:\n"
-            "Alle Lieder werden hochgeladen, Lieder, die hier fehlen, werden überall gelöscht.\n"
-            "Nach dem Austausch der Datenbank nutzen – vorher eine Sicherungskopie anlegen.")
+        self.sync_force_btn.setToolTip("Dieser Stand gilt für alle Geräte\nVorher sichern!")
         self.sync_force_btn.clicked.connect(self._sync_force_clicked)
         self.sync_url_input.editingFinished.connect(self._apply_sync_fields)
         self.sync_token_input.editingFinished.connect(self._apply_sync_fields)
@@ -549,18 +594,17 @@ class SettingsDialog(QDialog):
                           self._field("Server-Adresse", self.sync_url_input),
                           token_box, self.sync_status_label,
                           title="Abgleich mit Server",
-                          info="Die Datenbank bleibt auf jedem Gerät lokal; über deinen Server werden nur Änderungen an den Liedern "
-                               "geteilt – automatisch beim Start und danach jede Minute. Auf allen Geräten dieselbe Adresse und dasselbe Token.")
+                          info="Teilt Lied-Änderungen zwischen den Geräten. Überall dieselbe Adresse und dasselbe Token.")
 
     def create_data_tab(self):
         self.db_path_input = self._line_edit(default_db_path())
-        self.db_path_input.setToolTip("Leer lassen: die Datenbank wird automatisch gesucht (Platzhalter zeigt den Standardpfad)")
+        self.db_path_input.setToolTip("Leer = automatisch suchen")
         self.db_path_browse_btn = self._outline_button("Durchsuchen …")
         self.db_path_browse_btn.clicked.connect(self.browse_database_path)
-        self.db_path_browse_btn.setToolTip("Datenbank-Datei auswählen\nWird beim Speichern sofort geladen, Wiedergabe und Liedauswahl werden zurückgesetzt")
+        self.db_path_browse_btn.setToolTip("Datenbank wählen")
         self.db_path_reset_btn = self._outline_button("Automatisch")
         self.db_path_reset_btn.clicked.connect(lambda: self.db_path_input.clear())
-        self.db_path_reset_btn.setToolTip("Auswahl entfernen – die Datenbank wird wieder automatisch gesucht")
+        self.db_path_reset_btn.setToolTip("Wieder automatisch suchen")
         db_row = QHBoxLayout()
         db_row.setSpacing(t.GAP)
         db_row.addWidget(self.db_path_input, 1)
@@ -575,16 +619,13 @@ class SettingsDialog(QDialog):
         db_layout.addWidget(db_caption)
         db_layout.addLayout(db_row)
 
-        return self._page(
-            self._card(db_box, title="Datenbank", info="Die Lieder-Datenbank (LiedManager.db) dieses Geräts."),
-            self._build_sync_card(),
-        )
+        return {"db": self._card(db_box, title="Datenbank"), "sync": self._build_sync_card()}
 
     def create_update_tab(self):
         self.update_checkbox = self._checkbox("Beim Start nach Updates suchen")
-        self.update_checkbox.setToolTip("Fragt beim Programmstart bei GitHub nach einer neueren Version (nur wenn online)")
+        self.update_checkbox.setToolTip("Fragt bei GitHub nach neuen Versionen")
         self.update_check_btn = self._outline_button("Jetzt nach Updates suchen")
-        self.update_check_btn.setToolTip("Prüft sofort, ob es eine neuere Version gibt")
+        self.update_check_btn.setToolTip("Sofort prüfen")
         self.update_check_btn.clicked.connect(self.update_check_requested)
         self.update_status_label = QLabel()
         self.update_status_label.setWordWrap(True)
@@ -600,24 +641,19 @@ class SettingsDialog(QDialog):
             self.update_checkbox.setEnabled(False)
             self.set_update_status("In dieser Version nicht eingerichtet (Start aus dem Quellcode).")
 
-        return self._page(self._card(self.update_checkbox, update_row, title="Updates",
-                                      info="Fragt beim Programmstart bei GitHub nach einer neueren Version (nur wenn online)."))
+        return [self.update_checkbox, update_row]       # steht in der Karte „Programm“ (Reiter Allgemein)
 
     def create_remote_tab(self):
         """Reiter „Remote“: LiedManager per Handy über die eigene Website bedienen."""
-        self.site_checkbox = self._checkbox("Remote über meine Website einschalten")
-        self.site_checkbox.setToolTip(
-            "Verbindet LiedManager mit deiner Website (remote.php). Dann bedienst du das Programm per Handy von überall –\n"
-            "mit HTTPS und PIN. LiedManager muss dafür laufen und online sein. Die PIN legst du in remote.php fest.")
+        self.site_checkbox = self._checkbox("Remote-Steuerung einschalten")
+        self.site_checkbox.setToolTip("Bedienung per Handy über die Website")
         self.site_url_input = self._line_edit("https://deine-domain.de/steuerung/remote.php")
-        self.site_url_input.setToolTip("Adresse von remote.php auf deiner Website (mit https://). Dieselbe Adresse öffnest du im Browser.")
+        self.site_url_input.setToolTip("Adresse von remote.php")
         self.site_token_input = self._line_edit("Token (steht in remote.php)")
         self.site_token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.site_token_input.setToolTip("Das geheime Token aus der Datei remote.php auf dem Server (mindestens 16 Zeichen).")
+        self.site_token_input.setToolTip("Token aus remote.php")
         self.device_name_input = self._line_edit("z. B. Kirche, Büro, Laptop")
-        self.device_name_input.setToolTip(
-            "Mit diesem Namen meldet sich der Computer bei der Website. Laufen mehrere Computer, wählst du im Browser\n"
-            "oben aus, welcher bedient wird – Steuerung und Bilder gehen nur an diesen.")
+        self.device_name_input.setToolTip("Name dieses Computers in der Fernsteuerung")
         self.device_name_input.editingFinished.connect(self._save_device_name)
         self.site_checkbox.toggled.connect(self._site_toggled)
         self.site_url_input.editingFinished.connect(self._save_site_fields)
@@ -626,15 +662,14 @@ class SettingsDialog(QDialog):
         self.site_status_label.setWordWrap(True)
         self.site_status_label.setStyleSheet(t.hint_style())
         self.site_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.wp_checkbox = self._checkbox("Aufnahmen automatisch in die WordPress-Mediathek hochladen")
+        self.wp_checkbox = self._checkbox("Automatisch in die WordPress-Mediathek hochladen")
         self.wp_checkbox.toggled.connect(self._wp_toggled)
         self.wp_url_input = self._line_edit("https://deine-domain.de")
-        self.wp_url_input.setToolTip("Adresse deiner WordPress-Seite (mit https://, ohne /wp-admin)")
+        self.wp_url_input.setToolTip("Ohne /wp-admin")
         self.wp_user_input = self._line_edit("WordPress-Benutzername")
         self.wp_password_input = self._line_edit("Anwendungspasswort")
         self.wp_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.wp_password_input.setToolTip("WordPress → Benutzer → Profil → „Anwendungspasswörter“: Namen eingeben (z. B. LiedManager), "
-                                          "„Neues Anwendungspasswort hinzufügen“, den angezeigten Code hier einfügen.")
+        self.wp_password_input.setToolTip("WordPress → Profil → Anwendungspasswörter")
         for edit in (self.wp_url_input, self.wp_user_input, self.wp_password_input):
             edit.editingFinished.connect(self._save_wp_fields)
         # Nur Aufnahmen von diesen Wochentagen hochladen (z. B. nur Sonntag)
@@ -653,7 +688,7 @@ class SettingsDialog(QDialog):
         days_layout = QVBoxLayout(self.upload_days_box)
         days_layout.setContentsMargins(0, 0, 0, 0)
         days_layout.setSpacing(6)
-        days_caption = QLabel("Nur Aufnahmen von diesen Tagen hochladen")
+        days_caption = QLabel("Nur von diesen Tagen")
         days_caption.setStyleSheet(t.caption_style())
         days_layout.addWidget(days_caption)
         days_layout.addLayout(days_row)
@@ -661,31 +696,26 @@ class SettingsDialog(QDialog):
         self.upload_status_label.setWordWrap(True)
         self.upload_status_label.setStyleSheet(t.hint_style())
         self.upload_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        return self._page(
-            self._card(self.site_checkbox,
-                       self._two_fields(self._field("Adresse der Website", self.site_url_input),
-                                        self._field("Token", self.site_token_input),
-                                        self._field("Name dieses Computers", self.device_name_input)),
-                       self.site_status_label,
-                       title="Remote-Steuerung",
-                       info="Bedienung per Handy von überall: LiedManager verbindet sich mit deiner Website (remote.php) und holt "
-                            "dort die Befehle ab. Das Programm muss laufen und online sein. Die PIN für den Browser legst du in remote.php fest."),
-            self._card(self.wp_checkbox,
+        return {
+            "remote": self._card(self.site_checkbox,
+                                 self._two_fields(self._field("Adresse der Website", self.site_url_input),
+                                                  self._field("Token", self.site_token_input),
+                                                  self._field("Name dieses Computers", self.device_name_input)),
+                                 self.site_status_label,
+                                 title="Remote-Steuerung",
+                                 info="Bedienung per Handy. LiedManager muss laufen; die PIN steht in remote.php."),
+            "upload": [self.wp_checkbox,
                        self._two_fields(self._field("WordPress-Adresse", self.wp_url_input),
                                         self._field("Benutzername", self.wp_user_input),
                                         self._field("Anwendungspasswort", self.wp_password_input)),
                        self.upload_days_box,
-                       self.upload_status_label,
-                       title="Aufnahmen hochladen",
-                       info="Benutzer mit Rolle „Autor“ oder höher. Das Anwendungspasswort erstellst du in WordPress unter Benutzer → Profil. "
-                            "Ist ffmpeg installiert, wird die Aufnahme vorher in eine kleine MP3 umgewandelt (Mono, 64 kbit/s)."),
-            self._card(self.ccli_report_btn,
-                       self._field("Nicht melden (Zeiten)", self.no_report_input),
-                       self.ccli_status_label,
-                       title="CCLI-Meldung",
-                       info="Meldet die gespielten Lieder (nur CCLI-Nummern) bei CCLI „Suchen & Melden“. Lieder aus den Zeiten unter "
-                            "„Nicht melden“ werden übersprungen. Voraussetzung: „Gespielte Lieder“ unter Anzeige ist eingeschaltet."),
-        )
+                       self.upload_status_label],
+            "ccli": self._card(self.ccli_report_btn,
+                               self._field("Nicht melden (Zeiten)", self.no_report_input),
+                               self.ccli_status_label,
+                               title="CCLI-Meldung",
+                               info="Meldet nur die CCLI-Nummern der gespielten Lieder."),
+        }
 
     def set_upload_status(self, text: str) -> None:
         self.upload_status_label.setText(text)

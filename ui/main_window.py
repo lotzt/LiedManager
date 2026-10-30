@@ -136,8 +136,8 @@ class MainWindow(QMainWindow):
         )
         self.settings_button.clicked.connect(self.open_settings)
         self.gong_button = w.icon_button(
-            w.ICON_BELL, t.ACCENT, 20, "Gong abspielen", style=t.round_button_style())
-        self.gong_button.clicked.connect(self.gong.play)
+            w.ICON_BELL, t.ACCENT, 20, "Gong an/aus", style=t.round_button_style())
+        self.gong_button.clicked.connect(self.gong.toggle)   # 1 Klick an, 1 Klick aus
         self.title_label = self._build_title_label()
         self.audio_section = self._build_audio_section()
         self.results_list = self._build_results_list()
@@ -206,10 +206,7 @@ class MainWindow(QMainWindow):
     def _build_search_field(self):
         search_input = QLineEdit()
         search_input.setPlaceholderText("Suche")
-        search_input.setToolTip("Suche nach Liednummer (z. B. 12 oder p012), Titel oder Textstelle\n"
-                                "Enter: suchen · nochmal Enter: Beamer-Bild öffnen\n"
-                                "Mehrere Treffer: Doppelklick oder Enter wählt das Lied vor\n"
-                                "Esc oder Doppelklick: Beamer-Bild schließen, dann Suche leeren und Audio entfernen")
+        search_input.setToolTip("Enter: suchen · nochmal Enter: anzeigen\nEsc: schließen · Doppelklick: leeren")
         search_input.setClearButtonEnabled(False)
         search_input.addAction(
             w.themed_icon(w.ICON_SEARCH, t.TEXT_MUTED, 17),
@@ -228,7 +225,7 @@ class MainWindow(QMainWindow):
         results_list.setUniformItemSizes(True)
         results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         results_list.setTextElideMode(Qt.TextElideMode.ElideRight)
-        # Einfachklick markiert nur; Doppelklick (oder Enter) wählt das Lied vor – wie bei den Bildern
+        # Einfachklick markiert nur; Doppelklick wählt das Lied vor, danach zeigt Enter es auf dem Beamer
         results_list.itemDoubleClicked.connect(self._on_result_clicked)
         return results_list
 
@@ -259,7 +256,7 @@ class MainWindow(QMainWindow):
             font-size: 17px;
             color: {t.TEXT_PRIMARY};
         """)
-        title_label.setHint("Klicken: Liednummer ins Suchfeld übernehmen")
+        title_label.setHint("Klick: Nummer ins Suchfeld")
         title_label.clicked.connect(self._on_title_clicked)
         return title_label
 
@@ -299,7 +296,7 @@ class MainWindow(QMainWindow):
         self.no_audio_label = QLabel("Keine Audiodatei vorhanden")
         self.no_audio_label.setStyleSheet(f"color: {t.TEXT_MUTED}; font-size: {t.FS}px;")
         self.no_audio_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.no_audio_label.setToolTip("Zu diesem Lied ist keine Audiodatei gespeichert")
+        self.no_audio_label.setToolTip("Kein Audio zu diesem Lied")
         layout.addWidget(self.no_audio_label, 1, vcenter)
         return page
 
@@ -426,7 +423,7 @@ class MainWindow(QMainWindow):
         if obj in getattr(self, "_hint_watched", ()) and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
             QTimer.singleShot(0, self._update_empty_hint)
         if obj is self.search_input and event.type() == QEvent.Type.MouseButtonDblClick:
-            self.handle_escape()  # Doppelklick ins Suchfeld = wie Esc
+            self._on_search_double_click()
             return True
         if obj is self.search_input and event.type() == QEvent.Type.KeyPress:
             key = event.key()
@@ -447,29 +444,41 @@ class MainWindow(QMainWindow):
                     return True
         return super().eventFilter(obj, event)
 
+    def _beamer_showing(self) -> bool:
+        return (any(win is not None and win.isVisible() for win in (self.presentation_window, self.gallery_window))
+                or bool(self.camera_panel.fullscreen_indices()))
+
+    def _on_search_double_click(self):
+        """Doppelklick in die Suchzeile: läuft etwas auf dem Beamer, wird nur die Zeile geleert (Bild und Audio bleiben);
+        sonst wie das letzte Esc – Suche leeren und Audio entfernen."""
+        if self._beamer_showing():
+            self.search_input.clear()
+        else:
+            self.handle_escape()
+
     def _on_escape_shortcut(self):
         if self.pausentimer_panel.text_edit.hasFocus():  # beim Tippen der Ansagen nicht die Suche leeren
             return
         self.handle_escape()
 
     def handle_escape(self):
-        """ESC: schließt zuerst das Beamer-Bild, dann ein Kamera-Vollbild; sonst Audio stoppen und Suche leeren."""
+        """ESC: schließt zuerst das Beamer-Bild bzw. Kamera-Vollbild; sonst (oder bei leerer Suchzeile gleich mit) Audio stoppen und Suche leeren."""
+        closed = False
         if self.gallery_window is not None and self.gallery_window.isVisible():
             self.close_gallery()  # Bilder-Galerie liegt oben -> zuerst schließen
-            atem.switch("default")
-            self.focus_search()
-            return
-
-        if self.presentation_window is not None and self.presentation_window.isVisible():
+            closed = True
+        elif self.presentation_window is not None and self.presentation_window.isVisible():
             self.close_presentation()
+            closed = True
+        elif self.camera_panel.close_all_fullscreen():  # offenes Kamera-Vollbild zuerst schließen
+            closed = True
+
+        if closed:
             atem.switch("default")        # der Mischer schaltet beim Schließen zurück, wie beim Schließen im Web
             self.focus_search()
-            return
-
-        if self.camera_panel.close_all_fullscreen():  # offenes Kamera-Vollbild zuerst schließen
-            atem.switch("default")
-            self.focus_search()
-            return
+            if self.search_input.text().strip():
+                return                    # Suchzeile noch gefüllt: Audio bleibt bis zum nächsten Esc
+            # Suchzeile schon leer (z. B. per Doppelklick geleert): Audio geht gleich mit weg
 
         self.playback.stop()
         self._set_audio_state(self.AUDIO_EMPTY)
@@ -572,9 +581,7 @@ class MainWindow(QMainWindow):
             return
 
         if self.results_list.isVisible() and self.results_list.count() > 0:
-            item = self.results_list.currentItem() or self.results_list.item(0)
-            self._on_result_clicked(item)
-            return
+            return        # Trefferliste: gewählt wird nur per Doppelklick auf einen Treffer
 
         if self.current_song_summary is not None and text.lower() == self._last_searched_query:
             self.open_presentation()

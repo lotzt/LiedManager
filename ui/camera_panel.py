@@ -48,7 +48,7 @@ class CameraSlot(QFrame):
         self.setObjectName("CamSlot")
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)   # nur per Klick gewählt, nie automatisch
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Kamerabild\nDoppelklick: auf dem Beamer zeigen\nEsc: Vollbild beenden")
+        self.setToolTip("Doppelklick: anzeigen · Esc: schließen")
         self.setStyleSheet(f"""
             QFrame#CamSlot {{
                 background: #000000;
@@ -131,9 +131,10 @@ class CameraSlot(QFrame):
         self._update_mask()
 
     def mouseDoubleClickEvent(self, event):
-        """Doppelklick = aufs Beamer-Bild werfen bzw. wieder zurück (wie bei den Bildern)."""
+        """Doppelklick = aufs Beamer-Bild werfen. Geschlossen wird nur mit Esc."""
         if event.button() == Qt.MouseButton.LeftButton and self.state in ("live", "fullscreen"):
-            self.fullscreen_toggled.emit(self.index)
+            if self.state == "live":
+                self.fullscreen_toggled.emit(self.index)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
@@ -189,7 +190,7 @@ class CameraPanel(QWidget):
         self.slots = []
         for index in range(self.SLOT_COUNT):
             slot = CameraSlot(index, self)
-            slot.fullscreen_toggled.connect(self.toggle_fullscreen)
+            slot.fullscreen_toggled.connect(self.open_fullscreen)     # öffnen; schließen nur mit Esc
             slot.escape_pressed.connect(self.close_fullscreen)
             layout.addWidget(slot)
             self.slots.append(slot)
@@ -331,6 +332,11 @@ class CameraPanel(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def open_fullscreen(self, index: int):
+        """Kamerabild auf den Beamer (ist es schon dort, passiert nichts – geschlossen wird mit Esc)."""
+        if index not in self._fullscreen:
+            self.toggle_fullscreen(index)
 
     def toggle_fullscreen(self, index: int):
         if index in self._fullscreen:

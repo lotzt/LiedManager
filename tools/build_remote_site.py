@@ -22,6 +22,14 @@ PARTS = {
     "__PAGE_HTML__": ("LM_PAGE_HTML", "/"),
     "__PAGE_CSS__": ("LM_PAGE_CSS", "/app.css"),
     "__PAGE_JS__": ("LM_PAGE_JS", "/app.js"),
+    "__PAGE_MANIFEST__": ("LM_PAGE_MANIFEST", "/manifest.webmanifest"),
+}
+# Bilder (Logo) -> Platzhalter für Base64 in einer PHP-Zeichenkette
+IMAGES = {
+    "__ICON_FAVICON__": "/favicon-32.png",
+    "__ICON_180__": "/icon-180.png",
+    "__ICON_192__": "/icon-192.png",
+    "__ICON_512__": "/icon-512.png",
 }
 
 
@@ -45,6 +53,11 @@ def render(values: dict = None) -> str:
         if php.count(marker) != 1:
             raise ValueError(f"Platzhalter {marker} muss genau einmal in remote_template.php stehen.")
         php = php.replace(marker, content.rstrip("\n"))
+    import base64
+    for marker, path in IMAGES.items():
+        if php.count(marker) != 1:
+            raise ValueError(f"Platzhalter {marker} muss genau einmal in remote_template.php stehen.")
+        php = php.replace(marker, base64.b64encode(assets[path][1]).decode("ascii"))
     return php
 
 

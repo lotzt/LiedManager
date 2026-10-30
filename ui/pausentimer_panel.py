@@ -54,7 +54,7 @@ class PausentimerPanel(QFrame):
         self.title.setStyleSheet(
             f"font-size: {t.FS}px; font-weight: 500; color: {t.TEXT_LABEL}; border: 0;"
         )
-        self.title.setToolTip("Klicken: Ansagen ein- oder ausklappen")
+        self.title.setToolTip("Ansagen ein-/ausklappen")
         self.title.clicked.connect(self.toggle)
         header.addWidget(self.title, 1)
 
@@ -63,7 +63,7 @@ class PausentimerPanel(QFrame):
         self.time_edit.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
         self.time_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_edit.setFixedSize(72, t.BTN)
-        self.time_edit.setToolTip("Endzeit der Pause (Uhrzeit ändern)")
+        self.time_edit.setToolTip("Ende der Pause")
         self.time_edit.setTime(DEFAULT_END_TIME)   # beginnt bei jedem Programmstart wieder mit 11:30
         self.time_edit.setStyleSheet(
             t.input_style("QTimeEdit", "0 8px", color=t.ACCENT, weight=600)
@@ -77,7 +77,7 @@ class PausentimerPanel(QFrame):
 
         self.chevron = w.ClickableLabel()
         self.chevron.setStyleSheet("border: 0;")
-        self.chevron.setToolTip("Ansagen ein- oder ausklappen")
+        self.chevron.setToolTip("Ansagen ein-/ausklappen")
         self.chevron.clicked.connect(self.toggle)
         header.addWidget(self.chevron, 0, vcenter)
         layout.addLayout(header)
@@ -104,7 +104,7 @@ class PausentimerPanel(QFrame):
         while too_wide() and font.pixelSize() > 9:
             font.setPixelSize(font.pixelSize() - 1)
         self.text_edit.setFont(font)
-        self.text_edit.setToolTip("Ansagen für die Pausenfolie – eine Zeile pro Ansage")
+        self.text_edit.setToolTip("Eine Zeile pro Ansage")
         self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -150,7 +150,7 @@ class PausentimerPanel(QFrame):
         self._running = running
         svg = w.ICON_STOP if running else w.ICON_PLAY
         self.start_btn.setIcon(w.themed_icon(svg, t.ACCENT_LIGHT, 16))
-        self.start_btn.setToolTip("Präsentation schließen" if running else "Pausentimer starten")
+        self.start_btn.setToolTip("Pausentimer beenden" if running else "Pausentimer starten")
         if not running:  # nach jeder Pause geht es wieder mit 11:30 los
             self.time_edit.setTime(DEFAULT_END_TIME)
 

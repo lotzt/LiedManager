@@ -36,7 +36,7 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 **Auf jedem Gerät:**
 
 1. Die Datenbank auf alle Geräte kopieren (gleicher Ausgangsstand).
-2. *Einstellungen → Datenbank*: „Abgleich einschalten“, Adresse (`https://…/sync/sync.php`) und dasselbe Token eintragen (wird sofort gespeichert; beim Ausschalten bleiben beide erhalten).
+2. *Einstellungen → Lieder*: „Abgleich einschalten“, Adresse (`https://…/sync/sync.php`) und dasselbe Token eintragen (wird sofort gespeichert; beim Ausschalten bleiben beide erhalten).
 3. Fertig. Beim ersten Mal gilt der aktuelle Stand als Ausgangspunkt, es wird nichts hochgeladen.
 
 Ändert man die Datenbank mit einem Editor, erkennt LiedManager die Änderung und schickt sie zum Server; die anderen
@@ -46,7 +46,7 @@ in Teilen zu je 6 MB hoch und werden auf dem Server in `lm_parts` abgelegt (bis 
 `server/sync.php` auf dem Server liegen (Tabellen werden automatisch angelegt). Lehnt der Server ein Lied dennoch ab, meldet
 das Programm das im Status und macht mit dem Rest weiter. Ältere Programmversionen können Lieder in Teilen nicht lesen.
 **Datenbank austauschen:** Eine Datei am selben Ort gilt als Änderung – fehlende Lieder werden dann auf allen Geräten
-gelöscht. Soll die neue Datenbank der verbindliche Stand für alle sein, dient *Einstellungen → Datenbank → Alles neu
+gelöscht. Soll die neue Datenbank der verbindliche Stand für alle sein, dient *Einstellungen → Lieder → Alles neu
 hochladen* (mit Rückfrage): Alle Lieder gehen zum Server, was in dieser Datenbank fehlt, wird überall gelöscht, die anderen
 Geräte übernehmen den Stand. Vorher eine Sicherungskopie anlegen; eine leere Datenbank wird nie hochgeladen.
 Ohne HTTPS verweigert das Programm den Abgleich, weil das Token sonst offen übertragen würde.
@@ -101,7 +101,7 @@ Server: `server/remote_template.php`.
 
 ### Behringer X AIR 18: Lautstärke und Mute über die Webseite
 
-Einstellungen → ATEM → „Behringer X AIR Mischpult … steuern“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
+Einstellungen → Audio → „Behringer X AIR“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
 IP). LiedManager spricht das Pult per OSC/UDP (Port 10024) an und muss im selben Netzwerk stehen; das Pult selbst braucht keinen Internetzugang.
 Die Web-Fernsteuerung zeigt dann im Reiter „Kamera“ die Kanäle 1–8 mit Namen, Regler (lauter/leiser, Anzeige in dB) und Mute-Knopf.
 Neue `remote.php` hochladen (Zugangsdaten oben erneut eintragen). Logik: `services/xair.py`. Nicht an einem echten Pult getestet –
@@ -131,14 +131,14 @@ leert die Ablage und löscht die hochgeladenen Dateien auch von der Platte.
 
 ### Aufnahmen auf die Website laden
 
-Einstellungen → Remote → „Aufnahmen automatisch auf die Website hochladen“ (Adresse und Token wie bei der Remote-Steuerung,
+Einstellungen → Audio → Aufnahmen (Adresse und Token wie bei der Remote-Steuerung,
 die selbst nicht eingeschaltet sein muss). Jede gespeicherte Aufnahme wird in Stücken in den Ordner `aufnahmen` neben
 `remote.php` geladen; bricht die Verbindung ab, wird sie später fortgesetzt (Liste: `aufnahmen_hochladen.json` im
 Datenordner). Der Ordner ist nicht als Dateiliste einsehbar, die Dateien sind aber über ihre Adresse erreichbar –
 wer das nicht möchte, sollte den Ordner per KAS mit einem Passwort schützen. Nach dem Aktualisieren der Programmdatei
 `remote.php` neu hochladen (Zugangsdaten oben erneut eintragen).
 
-**Direkt in die WordPress-Mediathek:** Einstellungen → Remote → „Direkt in die WordPress-Mediathek laden“. Eintragen: Adresse der
+**Direkt in die WordPress-Mediathek:** Einstellungen → Audio → Aufnahmen → „Automatisch in die WordPress-Mediathek hochladen“. Eintragen: Adresse der
 WordPress-Seite, Benutzername und ein *Anwendungspasswort* (WordPress → Benutzer → Profil → Anwendungspasswörter, Benutzerrolle
 mindestens „Autor“). Die Aufnahme geht dann über die REST-Schnittstelle (`/wp-json/wp/v2/media`) in die Mediathek; `remote.php` wird dafür nicht
 gebraucht. WordPress nimmt die Datei in einem Stück an, die Größe begrenzen `upload_max_filesize` und `post_max_size` des Servers. Ist `ffmpeg`
@@ -185,7 +185,7 @@ Für diese Art ist Microsoft PowerPoint auf Mac oder Windows nötig.
 
 ## Liste der gespielten Lieder
 
-Einstellungen → Anzeige → „Liedhistorie“ zeigt die Lieder nach Tag, mit Suche und den am häufigsten gespielten.
+Einstellungen → Lieder → „Liedhistorie“ zeigt die Lieder nach Tag, mit Suche und den am häufigsten gespielten.
 
 Jedes Lied, das auf dem Beamer gezeigt wird, schreibt das Programm mit **Nummer und Titel** (sonst nichts) in **eine einzige
 Textdatei** `Gespielte Lieder.txt`, in die immer weiter eingetragen wird. Pro Tag steht eine Kopfzeile mit Wochentag und Datum,
@@ -195,9 +195,7 @@ darunter die Lieder; dasselbe Lied direkt hintereinander nur einmal:
     12 – Großer Gott, wir loben dich
     p004 – Befiehl du deine Wege
 
-Die Datei öffnest du unter *Einstellungen → Anzeige → „Liste der gespielten Lieder öffnen“*. Mit *Testmodus – nichts
-speichern* (im Fenstertitel steht dann „Testmodus“) läuft alles ohne Eintrag, zum Beispiel bei Proben. Das Speichern lässt sich
-dort auch ganz abschalten.
+Das Speichern lässt sich unter *Einstellungen → Lieder → Gespielte Lieder* abschalten.
 
 ### Meldung an CCLI
 
@@ -209,7 +207,7 @@ LiedManager meldet nicht selbst an CCLI (dafür ist eine Partner-Zulassung bei C
    CCLI-Nummern, eine pro Zeile (neue hinter noch offene; dasselbe Lied am selben Tag einmal). `Gespielte Lieder.txt` (Liedhistorie)
    bleibt dabei unverändert; das Programm merkt sich, bis wohin schon übernommen wurde. Lieder ohne Nummer fehlen (die Statuszeile
    zählt sie). Lieder von sonntags 9–10 Uhr und mittwochs 18:30–19:30 Uhr stehen mit „[nicht melden]“ in der Liste und werden
-   nicht gemeldet. Die Zeiten stellst du unter Einstellungen → Remote → CCLI-Meldung → „Nicht melden (Zeiten)“ ein (z. B. `So 09:00–10:00; Mi 18:30–19:30`,
+   nicht gemeldet. Die Zeiten stellst du unter Einstellungen → Lieder → CCLI-Meldung → „Nicht melden (Zeiten)“ ein (z. B. `So 09:00–10:00; Mi 18:30–19:30`,
    leer = alles melden).
 3. Danach öffnet sich CCLI „Suchen & Melden“ (https://reporting.ccli.com/search) in einem Browser (du loggst dich selbst ein, das Programm sieht keine Zugangsdaten),
    gibt jede Nummer ein, sucht und klickt „Lied melden“. Nach dem ersten Lied fragt es, ob alles stimmt (weiter / Rest automatisch /

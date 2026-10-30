@@ -1,7 +1,7 @@
 """Bilder-Ablage: Bilder per Drag & Drop ins Programm ziehen, Vorschau im Reiter „Bilder“ der Seitenleiste.
 
 * ``ImageDropFilter``  fängt das Ablegen von Bilddateien/Ordnern im ganzen Programm ab (auch über Textfeldern).
-* ``ImagesPanel``      zeigt die abgelegten Bilder als Vorschau; Doppelklick/Enter wirft sie auf den Beamer.
+* ``ImagesPanel``      zeigt die abgelegten Bilder als Vorschau; Doppelklick wirft sie auf den Beamer.
 * ``load_image``       lädt ein Bild verkleinert und nach EXIF-Ausrichtung gedreht (wird auch von der Galerie genutzt).
 """
 import os
@@ -224,7 +224,6 @@ class _ThumbList(w.SmoothListWidget):
     """
     remove_requested = pyqtSignal()
     escape_requested = pyqtSignal()
-    open_current = pyqtSignal()
 
     _allow_scroll_to = False     # Klassenattribut: schon beim Aufbau der Basisklasse muss es existieren
     WHEEL_STEP = 48          # Pixel pro Rastschritt am Mausrad (etwa ein drittel Bild)
@@ -283,8 +282,6 @@ class _ThumbList(w.SmoothListWidget):
             self.remove_requested.emit()
         elif key == Qt.Key.Key_Escape:
             self.escape_requested.emit()
-        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.open_current.emit()
         else:
             self._allow_scroll_to = True       # Pfeiltasten dürfen das gewählte Bild ins Sichtfeld holen
             try:
@@ -353,7 +350,7 @@ class ImagesPanel(QWidget):
         self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.clear_btn.setStyleSheet(t.pill_button_style(radius=14, font_size=13) + "QPushButton { padding: 0; }")
-        self.clear_btn.setToolTip("Alle Bilder entfernen (hochgeladene Dateien werden auch gelöscht)")
+        self.clear_btn.setToolTip("Alle Bilder entfernen")
         self.clear_btn.clicked.connect(self.clear)
         header.addWidget(self.clear_btn)
         self._header = header
@@ -366,12 +363,11 @@ class ImagesPanel(QWidget):
             f"background: #000000; border: 2px solid {t.BORDER}; border-radius: {t.RADIUS}px; "
             f"color: {t.TEXT_MUTED}; font-size: 13px;"
         )
-        self.empty_label.setToolTip("Bilder oder einen Ordner mit Bildern auf das Programm ziehen")
+        self.empty_label.setToolTip("Bilder hierher ziehen")
         layout.addWidget(self.empty_label, 1)
 
         self.list = _ThumbList()
         self.list.itemDoubleClicked.connect(lambda item: self.open_requested.emit(self.list.row(item)))
-        self.list.open_current.connect(self._open_current)
         self.list.remove_requested.connect(self.remove_selected)
         self.list.escape_requested.connect(self.escape_requested)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -416,7 +412,7 @@ class ImagesPanel(QWidget):
                     continue
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, make_thumbnail(image))
-                item.setToolTip(f"{os.path.basename(path)}\nDoppelklick: auf dem Beamer zeigen\nEntf: Bild entfernen")
+                item.setToolTip(f"{os.path.basename(path)}\nDoppelklick: anzeigen · Esc: schließen")
                 self.list.addItem(item)
                 self._paths.append(path)
                 if first_new_row is None:

@@ -62,6 +62,18 @@ const PAGE_JS = <<<'LM_PAGE_JS'
 __PAGE_JS__
 LM_PAGE_JS;
 
+const PAGE_MANIFEST = <<<'LM_PAGE_MANIFEST'
+__PAGE_MANIFEST__
+LM_PAGE_MANIFEST;
+
+// Logo (PNG, Base64) für Browser-Tab, Lesezeichen und „Zum Home-Bildschirm“
+const PAGE_ICONS = [
+    'favicon' => '__ICON_FAVICON__',
+    'icon180' => '__ICON_180__',
+    'icon192' => '__ICON_192__',
+    'icon512' => '__ICON_512__',
+];
+
 // ---------------------------------------------------------------------------------------------
 // Hilfsfunktionen
 // ---------------------------------------------------------------------------------------------
@@ -113,7 +125,7 @@ function security_headers(): void {
     header('Referrer-Policy: no-referrer');
     header('Strict-Transport-Security: max-age=31536000');
     header("Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
-        . "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+        . "connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
 }
 
 function send(int $code, string $body, string $type, array $extra = []): void {
@@ -812,6 +824,12 @@ function page(): void {
     }
     if ($asset === 'js') {
         send(200, str_replace('__SELF__', $self, PAGE_JS), 'application/javascript; charset=utf-8');
+    }
+    if ($asset === 'manifest') {
+        send(200, str_replace('__SELF__', $self, PAGE_MANIFEST), 'application/manifest+json; charset=utf-8');
+    }
+    if (isset(PAGE_ICONS[$asset])) {
+        send(200, base64_decode(PAGE_ICONS[$asset]), 'image/png', ['Cache-Control' => 'public, max-age=604800']);
     }
     send(200, str_replace('__SELF__', $self, PAGE_HTML), 'text/html; charset=utf-8');
 }
