@@ -46,22 +46,24 @@ def template_path(season: str):
     return custom_pausentimer_dir() / f"pausentimer_{season}.pptx"
 
 
-def write_announcements(pptx_path: str, lines) -> None:
-    """Schreibt die Ansagen in die erste Folie und behält dabei Schrift, Größe, Farbe und Stil der Vorlage."""
+def write_announcements(pptx_path: str, lines):
+    """Schreibt die Ansagen in die erste Folie und behält dabei Schrift, Größe, Farbe und Stil der Vorlage.
+    Gibt die Nummer (ab 1) des Ansagen-Felds auf der Folie zurück – für spätere Änderungen in der laufenden Präsentation."""
     try:
         from pptx import Presentation
     except ImportError:
         log.info("python-pptx nicht installiert – Ansagen werden nicht in die Folie geschrieben.")
-        return
+        return None
 
     prs = Presentation(pptx_path)
     if len(prs.slides) == 0:
-        return
+        return None
     shapes = list(prs.slides[0].shapes)
     target = (next((s for s in shapes if s.name == "AnsagenTextfeld"), None)
               or next((s for s in shapes if s.has_text_frame), None))
     if target is None or not target.has_text_frame:
-        return
+        return None
+    shape_index = shapes.index(target) + 1
 
     tf = target.text_frame
     paragraphs = list(tf.paragraphs)
@@ -97,6 +99,56 @@ def write_announcements(pptx_path: str, lines) -> None:
         paragraph.text = ""
 
     prs.save(pptx_path)
+    return shape_index
+
+
+def _applescript_text(lines) -> str:
+    """Zeilen als AppleScript-Ausdruck, Absätze mit „return“ (so trennt PowerPoint Absätze)."""
+    parts = ['"' + str(line).replace("\\", "\\\\").replace('"', '\\"') + '"' for line in lines] or ['""']
+    return " & return & ".join(parts)
+
+
+def _powershell_text(lines) -> str:
+    """Zeilen als PowerShell-Ausdruck, Absätze mit [char]13. Umlaute und andere Nicht-ASCII-Zeichen als [char]-Code,
+    damit sie unabhängig von der Zeichenkodierung der Konsole richtig ankommen."""
+    def line_expr(line: str) -> str:
+        parts, plain = [], ""
+        for char in str(line):
+            if ord(char) < 128:
+                plain += "''" if char == "'" else char
+            else:
+                if plain:
+                    parts.append(f"'{plain}'")
+                    plain = ""
+                parts.append(f"[string][char]{ord(char)}" if ord(char) <= 0xFFFF else "'?'")
+        if plain or not parts:
+            parts.append(f"'{plain}'")
+        return " + ".join(parts)
+    return "(" + " + [string][char]13 + ".join(line_expr(line) for line in (list(lines) or [""])) + ")"
+
+
+def text_command(shape_index: int, lines):
+    """Ansagen in der laufenden Präsentation ändern (Folie 1, Feld ``shape_index``) – Schrift und Stil bleiben."""
+    mac = f"""
+tell application "Microsoft PowerPoint"
+    set content of text range of text frame of shape {shape_index} of slide 1 of active presentation to {_applescript_text(lines)}
+end tell
+"""
+    text = _powershell_text(lines)
+    ps = f"""
+$ErrorActionPreference = 'Stop'
+try {{
+  $ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application')
+  $ppt.SlideShowWindows.Item(1).Presentation.Slides.Item(1).Shapes.Item({shape_index}).TextFrame.TextRange.Text = {text}
+  Write-Output 'ok'
+}} catch {{ Write-Output ('error: ' + $_.Exception.Message); exit 1 }}
+"""
+    session = ("$ErrorActionPreference = 'Stop'; "
+               "try { $null = $ppt.SlideShowWindows.Count } catch { "
+               "$ppt = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') }; "
+               f"$ppt.SlideShowWindows.Item(1).Presentation.Slides.Item(1).Shapes.Item({shape_index}).TextFrame.TextRange.Text = {text}; "
+               "Write-Output 'ok'")
+    return _command(mac, ps, session)
 
 
 # Es soll nur die Präsentation zu sehen sein – ohne Referentenansicht und ohne Bearbeitungsfenster.
@@ -419,6 +471,12 @@ class PausentimerController(QObject):
         self._timer.timeout.connect(self._check_slide)
         self._prepared.connect(self._on_prepared)
         self._session = None             # dauerhafte PowerShell (Windows)
+        self._shape_index = None         # Nummer des Ansagen-Felds auf Folie 1 (für Live-Änderungen)
+        self._pending_lines = None       # noch nicht übertragene Ansagen
+        self._lines_timer = QTimer(self)
+        self._lines_timer.setSingleShot(True)
+        self._lines_timer.setInterval(400)   # beim Tippen nicht jeden Buchstaben einzeln an PowerPoint schicken
+        self._lines_timer.timeout.connect(self._push_lines)
         self._session_failures = 0       # drei Fehler in Folge: zurück zum Einzelstart je Befehl
 
     @property
@@ -471,8 +529,9 @@ class PausentimerController(QObject):
                 shutil.copyfile(source, temp_path)       # nur der Inhalt (keine Markierung „aus dem Internet“)
                 clear_download_mark(temp_path)
                 try:
-                    write_announcements(temp_path, lines)
+                    self._shape_index = write_announcements(temp_path, lines)
                 except Exception as exc:  # fehlerhafte Ansagen sollen den Start nicht verhindern
+                    self._shape_index = None
                     log.warning("Ansagen konnten nicht in die Vorlage geschrieben werden: %s", exc)
                 self._prepared.emit(temp_path, "")
             except OSError as exc:
@@ -509,12 +568,35 @@ class PausentimerController(QObject):
         if not self._running:
             return
         self._timer.stop()
+        self._lines_timer.stop()
+        self._pending_lines = None
         self._running = False
         self._slide = None
         power.release()
         self._run_script(close_command(), lambda ok, out: None)   # Sitzung bleibt offen: der nächste Start geht schneller
         self.running_changed.emit(False)
         atem.switch("default")
+
+    def update_lines(self, lines) -> None:
+        """Ansagen wurden im Programm geändert: auch in der laufenden PowerPoint-Präsentation ändern."""
+        if not (self._running or self._preparing):
+            return
+        self._pending_lines = list(lines)
+        self._lines_timer.start()
+
+    def _push_lines(self) -> None:
+        if not self._running or self._pending_lines is None:
+            return
+        if self._script_busy or not self._timer.isActive() or not self._shape_index:
+            self._lines_timer.start()                 # PowerPoint öffnet noch oder ein Folienwechsel läuft: gleich nochmal
+            return
+        lines, self._pending_lines = self._pending_lines, None
+
+        def done(ok: bool, output: str) -> None:
+            if not (ok and "ok" in output) and output:
+                log.warning("Ansagen in PowerPoint nicht geändert: %s", output)
+
+        self._run_script(text_command(self._shape_index, lines), done)
 
     def set_end_time(self, end_time: QTime) -> None:
         """Endzeit wurde geändert -> Restzeit neu berechnen, Folie neu bestimmen."""

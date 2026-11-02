@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 WIDTH, HEIGHT = 1920, 1080
 DESIGN_FILE = "design.json"
-VERSION = 3                 # 2: Ansagen-Feld zuverlässiger erkannt · 3: Zahlen ohne Puls wie in PowerPoint (ältere Designs werden neu übernommen)
+VERSION = 4                 # 2: Ansagen-Feld zuverlässiger erkannt · 3: Zahlen ohne Puls wie in PowerPoint
+                            # 4: Zeilenabstand wächst/schrumpft mit der Schriftgröße (ältere Designs werden neu übernommen)
 
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -87,6 +88,19 @@ def save(season: str, design: dict) -> None:
     with open(temp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=1)
     temp.replace(folder / DESIGN_FILE)
+
+
+def line_height(layer: dict, size_factor: float = 1.0):
+    """Fester Zeilenabstand der Ebene in Pixeln – im Verhältnis zur eingestellten Schriftgröße (kleinere Schrift = engere
+    Zeilen = mehr Zeilen im Feld). ``None``: Zeilenabstand der Schrift."""
+    value = layer.get("line_height")
+    if not value:
+        return None
+    value = float(value)
+    base = float(layer.get("line_size") or 0)
+    if base > 0:
+        value *= float(layer.get("size", base)) / base
+    return value * size_factor
 
 
 def text_layer(design: dict, scene: str, role: str):
@@ -342,6 +356,8 @@ class _Importer:
                 style["line_height"] = round(int(points.get("val")) / 100 * WIDTH / 1440, 2)
             elif percent is not None:
                 style["line_height"] = round(style["size"] * 1.2 * int(percent.get("val")) / 100000, 2)
+            if style["line_height"]:
+                style["line_size"] = style["size"]          # zu dieser Schriftgröße gehört der Zeilenabstand
         return style
 
     def text(self, name, rect, body) -> dict:
@@ -487,7 +503,8 @@ def font_from_eot(blob: bytes):
 
 def import_pptx(pptx_path, season: str) -> dict:
     """Liest die Vorlage ein und speichert das Design der Jahreszeit (ersetzt ein vorhandenes). Gibt das Design zurück.
-    Eigene Einstellungen (Zeiten, Bibelvers) aus einem vorhandenen Design bleiben erhalten, wenn ``keep``-Felder gesetzt sind."""
+    Schriftarten, Schriftgrößen, Farben und Texte kommen immer aus der Vorlage; nur Zeiten, Bibelvers und Musik-Einstellungen
+    aus einem vorhandenen Design bleiben erhalten."""
     target = design_dir(season)
     staging = target.with_name(target.name + ".neu")
     shutil.rmtree(staging, ignore_errors=True)

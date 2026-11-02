@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         self.main_frame.lower()
         self.recording_panel = RecordingPanel(self.recorder)
         self.pausentimer_panel = PausentimerPanel(width=self.CONTENT_W)
+        self._apply_announcement_box()
         field_top = self.Y_PT + PausentimerPanel.BORDER + PausentimerPanel.HEADER_HEIGHT     # Oberkante des Ansagen-Textfelds im Fenster
         self.side_panel.set_align_source(self.pausentimer_panel.title, self.pausentimer_panel.text_edit)
         self.side_panel.set_field_span(field_top - (SidePanel.MARGIN_V + 1 + SidePanel.PAD), self.pausentimer_panel.text_height,
@@ -406,11 +407,23 @@ class MainWindow(QMainWindow):
             for delay in (80, 300):                               # nach dem Layout (und nach dem Fenster-Resize): Feld exakt auf Höhe des Textfelds
                 QTimer.singleShot(delay, self._align_images_field)
 
+    def _apply_announcement_box(self):
+        """Ansagen-Feld so groß wie das Textfeld der Pausenfolie (passt sich Jahreszeit und Schriftgröße an)."""
+        try:
+            from ui.pause_window import announcement_box
+            self.pausentimer_panel.set_box(announcement_box())
+        except Exception:                                  # nie den Programmstart verhindern
+            log.exception("Ansagen-Feld der Pausenfolie nicht lesbar")
+            self.pausentimer_panel.set_box(None)
+        if hasattr(self, "side_panel"):                  # Bilder-Feld rechts an die neue Feldhöhe anpassen
+            QTimer.singleShot(0, lambda: self.side_panel.align_field(self.pausentimer_panel.text_edit))
+
     def _on_pausentimer_start_clicked(self):
         if self.pausentimer.running:
             self.pausentimer.stop()
         else:
             self.pausentimer.start(self.pausentimer_panel.lines(), self.pausentimer_panel.end_time())
+            self._apply_announcement_box()       # beim ersten Start wird die Vorlage evtl. erst übernommen
 
     # ------------------------------------------------------------------
     # Tastatur & Suche
@@ -523,6 +536,7 @@ class MainWindow(QMainWindow):
         self.sync.status_changed.disconnect(dialog.set_sync_status)
         if accepted:
             self._update_title()
+            self._apply_announcement_box()
             self.camera_panel.update_streams_from_settings()
             self.playback.apply_output_device()
             self.gong.apply_output_device()

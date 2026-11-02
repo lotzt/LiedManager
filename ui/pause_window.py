@@ -193,7 +193,7 @@ class PauseRenderer:
         for _attempt in range(12):
             font = self.font(layer, size_factor)
             metrics = QFontMetricsF(font)
-            line_h = (float(layer["line_height"]) * size_factor if layer.get("line_height")
+            line_h = (pausenfolie.line_height(layer, size_factor) if layer.get("line_height")
                       else metrics.lineSpacing())
             lines = [str(text).strip()] if centered else self.wrap(text, metrics, area.width())
             total = line_h * len(lines) + (line_h * 2 if reference else 0)
@@ -250,8 +250,9 @@ class PauseRenderer:
             if layer.get("kind") != "text":
                 continue
             role = layer.get("role")
-            if role == "announcements":
-                self.draw_text(painter, layer, texts.get("announcements", ""), shrink_to=H - 30)
+            if role == "announcements":                      # bleibt im Textfeld der Vorlage (exakte Größe)
+                x, y, w, h = layer["rect"]
+                self.draw_text(painter, layer, texts.get("announcements", ""), shrink_to=y + h)
                 drawn_announcements = True
             elif role == "verse":
                 verse = dict(layer)
@@ -521,6 +522,44 @@ KEY_MODE = "pause_mode"            # "liedmanager" (ohne PowerPoint) oder "power
 MODES = (("liedmanager", "LiedManager (ohne PowerPoint)"), ("powerpoint", "PowerPoint (wie bisher)"))
 
 
+class AnnouncementBox:
+    """Das Ansagen-Textfeld der Vorlage: Größe, Schrift und Zeilenhöhe wie auf dem Beamer.
+    Damit erlaubt das Eingabefeld im Programm genau so viel Text, wie in das Original-Feld passt."""
+
+    def __init__(self, renderer: PauseRenderer, layer: dict):
+        l, t, r, b = layer.get("insets") or [0, 0, 0, 0]
+        x, y, w, h = layer["rect"]
+        self.width = max(10.0, float(w - l - r))
+        self.height = max(10.0, float(h - t - b))
+        self.font = renderer.font(layer)
+        self.metrics = QFontMetricsF(self.font)
+        self.line_height = pausenfolie.line_height(layer) or self.metrics.lineSpacing()
+        self.max_lines = max(1, int((self.height + 0.5) // self.line_height))
+        self.size = float(layer.get("size", 40))
+
+    def line_fits(self, line: str) -> bool:
+        return self.metrics.horizontalAdvance(line) <= self.width
+
+    def fits(self, text: str) -> bool:
+        lines = str(text).split("\n")
+        return len(lines) <= self.max_lines and all(self.line_fits(line) for line in lines)
+
+
+def announcement_box(season: str = None):
+    """``AnnouncementBox`` der eingestellten Jahreszeit – oder ``None`` (PowerPoint-Modus, keine Vorlage, kein Feld)."""
+    if pause_mode() != "liedmanager":
+        return None
+    season = season or app_settings().value("presentation_season", "frühling", type=str)
+    design = pausenfolie.load(season)
+    if design is None:
+        return None
+    renderer = PauseRenderer(design)
+    for layer in renderer.scene("announcements").get("layers", []):
+        if layer.get("kind") == "text" and layer.get("role") == "announcements" and layer.get("rect"):
+            return AnnouncementBox(renderer, layer)
+    return None
+
+
 def pause_mode() -> str:
     mode = str(app_settings().value(KEY_MODE, "liedmanager", type=str))
     return mode if mode in dict(MODES) else "liedmanager"
@@ -597,6 +636,7 @@ class Pausentimer(QObject):
 
     def update_lines(self, lines) -> None:
         self._native.update_lines(lines)
+        self._powerpoint.update_lines(lines)        # auch in der laufenden PowerPoint-Präsentation
 
     def warm_up(self) -> None:
         if pause_mode() == "powerpoint":

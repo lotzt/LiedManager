@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 SongSummary = namedtuple("SongSummary", "rowid nummer alias titel")
 
 _NUMBER_QUERY = re.compile(r"^([a-zA-Z])?(\d{1,3})$")
+_LETTER_QUERY = re.compile(r"^[a-zA-Z]$")          # nur ein Buchstabe: alle Liednummern mit diesem Buchstaben
 _LEADING_INT = re.compile(r"^\s*[+-]?\d+")
 _NON_WORD = re.compile(r"[^\w\s]")
 
@@ -167,6 +168,9 @@ class DatabaseManager:
         if not query or not self._ensure_cache():
             return []
 
+        if _LETTER_QUERY.match(query):
+            return [song.summary for song in self._search_letter(query)]
+
         found = self._search_number(query)
         if not found:
             norm_query = normalize(raw_query)
@@ -197,9 +201,45 @@ class DatabaseManager:
                 song = target
         return [song]
 
+    def _search_letter(self, letter: str):
+        """„p“ → alle Lieder, deren Nummer mit p und einer Ziffer beginnt (p001, p002 …), nach Nummer sortiert.
+        Liedtexte werden dabei nicht durchsucht."""
+        letter = letter.lower()
+        hits = []
+        for song in self._songs:
+            key = song.number_key
+            if song.has_alias or len(key) < 2 or key[0] != letter or not key[1].isdigit():
+                continue
+            digits = re.match(r"\d+", key[1:]).group()
+            hits.append((int(digits), key, song))
+        hits.sort(key=lambda hit: (hit[0], hit[1]))
+        return [song for _, _, song in hits]
+
     def _search_text(self, norm_query: str):
-        return [s for s in self._songs
+        """Treffer im Titel oder Text – die genau passenden zuerst:
+        Titel gleich → Titel beginnt damit → ganze Wörter im Titel → im Titel → eine ganze Textzeile gleich
+        → ganze Wörter im Text → irgendwo im Text. Innerhalb einer Stufe bleibt die Reihenfolge der Datenbank."""
+        padded = f" {norm_query} "
+
+        def rank(song):
+            title = song.norm_title
+            if title == norm_query:
+                return 0
+            if title.startswith(norm_query):
+                return 1
+            if padded in f" {title} ":
+                return 2
+            if norm_query in title:
+                return 3
+            if any(" ".join(words) == norm_query for words in song.lines):
+                return 4
+            if padded in f" {song.norm_lyrics} ":
+                return 5
+            return 6
+
+        hits = [s for s in self._songs
                 if not s.has_alias and (norm_query in s.norm_title or norm_query in s.norm_lyrics)]
+        return sorted(hits, key=rank)          # sorted ist stabil: gleiche Stufe = Reihenfolge der Datenbank
 
     def _search_fuzzy(self, norm_query: str):
         """Findet Passagen, die zu mindestens 80 % mit einer Textzeile (oder einem Teilstück) übereinstimmen."""
@@ -207,11 +247,13 @@ class DatabaseManager:
         n = len(query_words)
         matcher = SequenceMatcher(None, "", norm_query)  # seq2 wird nur einmal aufbereitet
 
-        def similar(candidate: str) -> bool:
+        def similar(candidate: str) -> float:
+            """Ähnlichkeit 0…1 (0, sobald sie sicher unter der Schwelle liegt)."""
             matcher.set_seq1(candidate)
-            return (matcher.real_quick_ratio() >= FUZZY_CUTOFF
-                    and matcher.quick_ratio() >= FUZZY_CUTOFF
-                    and matcher.ratio() >= FUZZY_CUTOFF)
+            if matcher.real_quick_ratio() < FUZZY_CUTOFF or matcher.quick_ratio() < FUZZY_CUTOFF:
+                return 0.0
+            ratio = matcher.ratio()
+            return ratio if ratio >= FUZZY_CUTOFF else 0.0
 
         results = []
         deadline = time.monotonic() + FUZZY_MAX_SECONDS
@@ -221,15 +263,18 @@ class DatabaseManager:
             if time.monotonic() > deadline:
                 log.info("Unscharfe Suche abgebrochen (Zeitlimit) – %d Treffer bis dahin.", len(results))
                 break
+            best = 0.0
             for words in song.lines:
                 if len(words) <= n:
-                    hit = similar(" ".join(words))
+                    best = max(best, similar(" ".join(words)))
                 else:
-                    hit = any(similar(" ".join(words[i:i + n])) for i in range(len(words) - n + 1))
-                if hit:
-                    results.append(song)
+                    best = max([best] + [similar(" ".join(words[i:i + n])) for i in range(len(words) - n + 1)])
+                if best >= 1.0:
                     break
-        return results
+            if best:
+                results.append((best, song))
+        results.sort(key=lambda hit: -hit[0])  # am besten passende zuerst (stabil: bei Gleichstand Datenbank-Reihenfolge)
+        return [song for _, song in results]
 
     # ------------------------------------------------------------------
     # Mediendaten

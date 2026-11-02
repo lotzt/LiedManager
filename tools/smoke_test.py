@@ -731,6 +731,21 @@ def test_pausenfolie(tmp, window, app) -> None:
     # Ablauf mit echtem Fenster (Musik gibt es in der Testvorlage nicht)
     _settings().setValue("presentation_season", "test")
     _settings().setValue(pause_window.KEY_MODE, "liedmanager")
+
+    # Ansagen-Feld im Programm erlaubt genau so viel Text wie das Textfeld der Vorlage
+    box = pause_window.announcement_box("test")
+    assert box is not None and box.max_lines >= 1, "Ansagen-Feld der Vorlage nicht erkannt"
+    assert box.fits("Hallo") and not box.fits("\n".join(["x"] * (box.max_lines + 1)))
+    assert not box.fits("W" * 400), "zu breite Zeile muss abgewiesen werden"
+    panel = window.pausentimer_panel
+    old_text = panel.text_edit.toPlainText()
+    panel.set_box(box)
+    panel.text_edit.setPlainText("\n".join(f"Zeile {i}" for i in range(box.max_lines + 3)))
+    assert panel.text_edit.toPlainText().count("\n") < box.max_lines, "mehr Zeilen als im Original-Feld"
+    panel.text_edit.setPlainText("Hallo")
+    panel.text_edit.setPlainText("Hallo " + "W" * 400)
+    assert panel.text_edit.toPlainText() == "Hallo", "zu lange Zeile muss abgewiesen werden"
+    panel.text_edit.setPlainText(old_text)
     timer = window.pausentimer
     from PyQt6.QtCore import QTime
     import datetime as _dt
@@ -984,6 +999,12 @@ def main() -> int:
     window.pausentimer_panel.toggle()
     settle()
     window.grab().save(str(SHOTS / "03_ansagen_offen.png"))
+
+    # Nur ein Buchstabe: alle Liednummern mit diesem Buchstaben, nach Nummer sortiert (Texte werden nicht durchsucht)
+    assert [x.nummer for x in window.db.search_songs("p")] == ["p001", "p002"]
+    assert window.db.search_songs("x") == [], "ein Buchstabe sucht nur in den Nummern"
+    # Textsuche: genau passender Titel zuerst
+    assert [x.nummer for x in window.db.search_songs("befiehl du deine wege")][0] == "p002"
 
     window.search_input.setText("gott")
     window._on_search_return_pressed()
