@@ -1,7 +1,7 @@
 """Aufnahmen direkt in die WordPress-Mediathek hochladen (REST-Schnittstelle ``/wp-json/wp/v2/media``).
 
 Anmeldung mit Benutzername und „Anwendungspasswort“ (WordPress → Benutzer → Profil → Anwendungspasswörter); das normale
-Passwort wird nicht gebraucht. WordPress nimmt die Datei in einer einzigen Anfrage entgegen, die Größe begrenzen
+Passwort wird nicht gebraucht. WordPress nimmt die Datei in einer einzigen Anfrage (als Formular-Upload) entgegen, die Größe begrenzen
 ``upload_max_filesize`` und ``post_max_size`` des Servers. Ist ``ffmpeg`` installiert, wird die WAV-Aufnahme vorher in eine
 kleine MP3 umgewandelt (Mono, 64 kbit/s – für Predigten ausreichend; die Originaldatei bleibt unverändert).
 Dieses Modul kennt Qt nicht.
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+import uuid
 import urllib.error
 import urllib.request
 
@@ -81,21 +82,45 @@ def to_mp3(path: str):
 
 
 class _Body:
-    """Datei als Anfragekörper: wird in Stücken gelesen (kein Laden der ganzen Datei in den Speicher) und meldet den Fortschritt."""
+    """Datei als Formular-Upload (multipart/form-data, Feld „file“): wird in Stücken gelesen (kein Laden der ganzen Datei in
+    den Speicher) und meldet den Fortschritt.
 
-    def __init__(self, path, on_progress, should_stop):
+    Als Formular legt PHP die Datei direkt in eine Temp-Datei. Beim früheren „rohen“ Hochladen las WordPress die ganze
+    Aufnahme in den Arbeitsspeicher – bei großen WAV-Dateien überschritt das die PHP-Grenze und der Server meldete Fehler 500."""
+
+    def __init__(self, path, on_progress, should_stop, filename: str = "", content_type: str = "application/octet-stream"):
         self._file = open(path, "rb")
-        self.total = os.path.getsize(path)
+        self.boundary = "----LiedManager" + uuid.uuid4().hex
+        safe = (filename or os.path.basename(path)).replace('"', "_")
+        self._head = (f"--{self.boundary}\r\n"
+                      f'Content-Disposition: form-data; name="file"; filename="{safe}"\r\n'
+                      f"Content-Type: {content_type}\r\n\r\n").encode("utf-8")
+        self._tail = f"\r\n--{self.boundary}--\r\n".encode("ascii")
+        self.size = os.path.getsize(path)
+        self.total = len(self._head) + self.size + len(self._tail)
         self.done = 0
+        self._head_sent = False
+        self._tail_sent = False
         self._on_progress, self._should_stop = on_progress, should_stop
+
+    @property
+    def content_type(self) -> str:
+        return f"multipart/form-data; boundary={self.boundary}"
 
     def read(self, size=-1):
         if self._should_stop is not None and self._should_stop():
             raise SyncError("Abgebrochen.")
-        data = self._file.read(256 * 1024 if size is None or size < 0 else min(size, 256 * 1024))
+        if not self._head_sent:
+            self._head_sent = True
+            data = self._head
+        else:
+            data = self._file.read(256 * 1024 if size is None or size < 0 else min(size, 256 * 1024))
+            if not data and not self._tail_sent:
+                self._tail_sent = True
+                data = self._tail
         self.done += len(data)
         if self._on_progress is not None:
-            self._on_progress(self.done, self.total)
+            self._on_progress(min(self.done, self.total), self.total)
         return data
 
     def close(self):
@@ -122,6 +147,8 @@ def _message(code: int, detail: str) -> str:
                 "(dann in die .htaccess von WordPress: RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]).")
     if code == 403:
         return "Keine Berechtigung – der Benutzer braucht mindestens die Rolle „Autor“ (und darf Dateien hochladen)."
+    if code == 400 and "upload" in detail.lower():
+        return f"WordPress hat keine Datei erhalten – wohl größer als upload_max_filesize/post_max_size des Servers ({detail})."
     if code == 413:
         return "Datei zu groß für den Server (WordPress/PHP-Grenze upload_max_filesize bzw. post_max_size)."
     return f"WordPress meldet Fehler {code}{': ' + detail if detail else ''}"
@@ -146,11 +173,10 @@ def upload_file(site_url: str, user: str, app_password: str, path: str, on_progr
     try:
         last_error = None
         for index, endpoint in enumerate(endpoints(site_url)):
-            body = _Body(source, on_progress, should_stop)
+            body = _Body(source, on_progress, should_stop, filename, CONTENT_TYPES[ext])
             request = urllib.request.Request(endpoint, data=body, method="POST", headers={
                 "Authorization": f"Basic {token}",
-                "Content-Type": CONTENT_TYPES[ext],
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": body.content_type,
                 "Content-Length": str(body.total),
                 "User-Agent": "LiedManager-Upload"})
             try:
@@ -171,9 +197,17 @@ def upload_file(site_url: str, user: str, app_password: str, path: str, on_progr
                     last_error = SyncError(_message(404, "REST-Schnittstelle nicht gefunden"))
                     continue
                 try:
-                    detail = str(json.loads(exc.read() or b"{}").get("message", ""))
-                except (ValueError, OSError):
-                    detail = ""
+                    raw = exc.read() or b""
+                except OSError:
+                    raw = b""
+                payload = _parse_json(raw) or {}
+                detail = str(payload.get("message", ""))
+                if not detail and raw:                            # z. B. „Kritischer Fehler“-Seite von WordPress
+                    log.warning("WordPress-Antwort (Fehler %s): %s", exc.code, " ".join(raw.decode("utf-8", "replace").split())[:500])
+                if exc.code == 500 and not detail:
+                    detail = ("Server-Fehler beim Verarbeiten der Datei – meist ist sie zu groß für die PHP-Grenzen "
+                              "(memory_limit, upload_max_filesize, post_max_size)"
+                              + ("; mit ffmpeg wird vorher eine viel kleinere MP3 erstellt" if ext == ".wav" else ""))
                 raise SyncError(_message(exc.code, detail), exc.code) from exc
             except (urllib.error.URLError, OSError) as exc:
                 raise SyncError(f"Server nicht erreichbar ({getattr(exc, 'reason', exc)})") from exc

@@ -1,10 +1,12 @@
 """Klappbarer Pausentimer-Bereich: Endzeit, Start/Stopp und Ansagen-Text."""
+import math
+import re
 import sys
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTime, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QFontMetricsF
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QPlainTextEdit, QTimeEdit, QVBoxLayout,
+    QFrame, QHBoxLayout, QLineEdit, QPlainTextEdit, QVBoxLayout,
 )
 
 from services.settings import app_settings
@@ -13,6 +15,60 @@ from ui import widgets as w
 
 DEFAULT_END_TIME = QTime(11, 30)   # Endzeit der Pause: immer wieder 11:30
 
+
+
+class TimeField(QLineEdit):
+    """Uhrzeit-Feld „HH:mm“ – ein einfaches Textfeld statt QTimeEdit: QTimeEdit zeigte unter Windows (mit eigenem Stil
+    und ohne Pfeile) im schmalen Feld gar keine Uhrzeit. Pfeiltasten/Mausrad: Stunde bzw. Minute (je nach Cursor) ±1."""
+    timeChanged = pyqtSignal(QTime)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._time = QTime(0, 0)
+        self.setInputMask("99:99")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.textEdited.connect(self._on_edited)
+        self.editingFinished.connect(lambda: self.setText(self._time.toString("HH:mm")))
+
+    def time(self) -> QTime:
+        return QTime(self._time)
+
+    def setTime(self, value: QTime) -> None:
+        value = QTime(value.hour(), value.minute())
+        changed = value != self._time
+        self._time = value
+        if self.text() != value.toString("HH:mm"):
+            position = self.cursorPosition()
+            self.setText(value.toString("HH:mm"))
+            self.setCursorPosition(position)
+        if changed:
+            self.timeChanged.emit(QTime(value))
+
+    def _on_edited(self, text: str) -> None:
+        hours, _, minutes = text.partition(":")
+        if len(hours.strip()) == 2 and len(minutes.strip()) == 2:
+            value = QTime(int(hours), int(minutes))
+            if value.isValid():
+                self.setTime(value)
+
+    def _step(self, steps: int) -> None:
+        if self.cursorPosition() <= 2:
+            self.setTime(self._time.addSecs(steps * 3600))
+        else:
+            self.setTime(self._time.addSecs(steps * 60))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self._step(1 if event.key() == Qt.Key.Key_Up else -1)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta:
+            self._step(1 if delta > 0 else -1)
+        event.accept()
 
 
 class PausentimerPanel(QFrame):
@@ -60,17 +116,10 @@ class PausentimerPanel(QFrame):
         self.title.clicked.connect(self.toggle)
         header.addWidget(self.title, 1)
 
-        self.time_edit = QTimeEdit()
-        self.time_edit.setDisplayFormat("HH:mm")
-        self.time_edit.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
-        self.time_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_edit = TimeField()
         self.time_edit.setToolTip("Ende der Pause")
         self.time_edit.setTime(DEFAULT_END_TIME)   # beginnt bei jedem Programmstart wieder mit 11:30
-        # Windows reserviert sonst trotz NoButtons Platz für die Pfeile – dann ist im schmalen Feld keine Uhrzeit zu sehen
-        self.time_edit.setStyleSheet(
-            t.input_style("QTimeEdit", "0 4px", color=t.ACCENT, weight=600)
-            + "QTimeEdit::up-button, QTimeEdit::down-button { width: 0px; height: 0px; border: 0; padding: 0; }"
-        )
+        self.time_edit.setStyleSheet(t.input_style("QLineEdit", "0 4px", color=t.ACCENT, weight=600))
         time_font = QFont(self.time_edit.font())
         time_font.setPixelSize(t.FS)
         time_font.setWeight(QFont.Weight.DemiBold)
@@ -141,42 +190,66 @@ class PausentimerPanel(QFrame):
     # Größen (für das Hauptfenster)
     # ------------------------------------------------------------------
     def _apply_field_style(self, font_px: int, padding: str = "8px 12px") -> None:
-        self.text_edit.setStyleSheet(
-            t.input_style("QPlainTextEdit", padding, color=t.TEXT_SECONDARY, font_size=font_px))
+        """``font_px`` 0: keine Schriftgröße im Stil – dann gilt die (stufenlose) Schrift des Felds."""
+        style = t.input_style("QPlainTextEdit", padding, color=t.TEXT_SECONDARY, font_size=font_px or t.FS)
+        if not font_px:
+            style = re.sub(r"font-size:\s*[0-9.]+px;", "", style)
+        self.text_edit.setStyleSheet(style)
 
     def set_box(self, box) -> None:
         """Ansagen-Feld der Pausenfolie übernehmen: Das Eingabefeld bekommt dessen Seitenverhältnis und die Schrift im
         gleichen Maßstab – es passt genau so viel Text hinein wie in das Original-Feld (Zeilen und Breite in der
         gewählten Schriftgröße). ``None``: die festen Grenzen (MAX_LINES Zeilen, MAX_CHARS Zeichen)."""
         self._box = box
-        full_w = self._width or self.text_edit.width()
-        self.text_edit.setFixedHeight(self.text_height)          # das Feld behält immer seine Größe
+        self.field_height = self.text_height
+        self.text_edit.setFixedHeight(self.text_height)
         if box is None:
             self.text_edit.setFont(self._default_font)
             self._apply_field_style(self._default_font.pixelSize())
             self.text_edit.setPlaceholderText(f"Ansagen (max. {self.MAX_LINES} Zeilen / {self.MAX_CHARS} Zeichen)")
         else:
-            # Nur die Schrift passt sich an – so groß, wie das Feld es hergibt: eine volle Beamer-Zeile füllt genau die
-            # Feldbreite, und alle erlaubten Zeilen passen untereinander ins Feld
-            avail_w = max(60, full_w - 2 * 8 - 2)
-            avail_h = max(40, self.text_height - 2 * 6 - 2)
-            font = QFont(box.font)
-            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0)
-            px = max(6, int(box.size * avail_w / box.width))
-            font.setPixelSize(px)
-            while px > 6 and (box.max_lines * QFontMetrics(font).lineSpacing() > avail_h
-                              or QFontMetricsF(font).averageCharWidth() * box.width / box.metrics.averageCharWidth()
-                              > avail_w + 0.5):
-                px -= 1
-                font.setPixelSize(px)
-            self.text_edit.setFont(font)
-            self._apply_field_style(px, "6px 8px")
+            self._box_font_px = None
+            self._fit_box_font()             # Feld in den Proportionen der Vorlage, Schrift im selben Maßstab
             self.text_edit.setPlaceholderText(f"Ansagen (max. {box.max_lines} Zeilen)")
         text = self.text_edit.toPlainText()
         clamped = self._clamp(text)
         if clamped != text:
             self.text_edit.setPlainText(clamped)        # löst _on_text_changed aus (speichert, Beamer aktualisiert sich)
         self._last_text = self.text_edit.toPlainText()
+
+    PAD_X, PAD_Y = 12, 8                 # Innenabstand des Ansagen-Felds (links = rechts)
+
+    def _fit_box_font(self) -> None:
+        """Volle Breite: Die Schrift wird stufenlos so skaliert, dass eine volle Beamer-Zeile genau bis zum rechten Rand
+        reicht (links und rechts gleicher Abstand). Die Höhe reicht genau für alle erlaubten Zeilen."""
+        box = self._box
+        if box is None:
+            return
+        inner_w = max(60, (self._width or self.text_edit.width()) - 2 * self.PAD_X - 2)
+        max_inner_h = max(40, 3 * self.text_height - 2 * self.PAD_Y - 2)   # nur extrem hohe Felder werden verkleinert
+        font = QFont(box.font)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0)
+        font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)   # Breiten wachsen genau mit der Größe
+        sample = self.FIT_SAMPLE + " 0123456789"
+        beamer = max(1.0, box.metrics.horizontalAdvance(sample))
+        target = inner_w / box.width * 0.995                # Beamer-Breite -> Feldbreite (minimal Luft gegen Rundung)
+        size = 10.0
+        font.setPointSizeF(size)
+        for _ in range(4):                                  # stufenlos (Bruchteile von Punkten) statt ganzer Pixel
+            size *= beamer * target / max(1.0, QFontMetricsF(font).horizontalAdvance(sample))
+            font.setPointSizeF(max(4.0, size))
+        while size > 4.0 and box.max_lines * QFontMetricsF(font).lineSpacing() > max_inner_h:
+            size *= 0.97
+            font.setPointSizeF(size)
+        used_w = QFontMetricsF(font).horizontalAdvance(sample) / beamer * box.width
+        extra_x = max(0, int((inner_w - used_w) / 2))
+        self.text_edit.setFont(font)
+        self._apply_field_style(0, f"{self.PAD_Y}px {self.PAD_X + extra_x}px")
+        # Qt setzt jede Zeile auf ganze Pixel (aufgerundet) – dazu etwas Luft, damit die letzte Zeile nie angeschnitten wird
+        line = math.ceil(QFontMetricsF(font).lineSpacing())
+        inner_h = box.max_lines * line + math.ceil(line * 0.5)
+        self.field_height = inner_h + 2 * self.PAD_Y + 2 + 4
+        self.text_edit.setFixedHeight(self.field_height)
 
     def max_lines(self) -> int:
         return self._box.max_lines if self._box is not None else self.MAX_LINES
@@ -185,7 +258,7 @@ class PausentimerPanel(QFrame):
         return self.BORDER + self.HEADER_HEIGHT
 
     def open_extra_height(self) -> int:
-        return self.text_height
+        return getattr(self, "field_height", self.text_height)
 
     # ------------------------------------------------------------------
     # API

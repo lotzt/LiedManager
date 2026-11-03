@@ -415,7 +415,9 @@ class MainWindow(QMainWindow):
         except Exception:                                  # nie den Programmstart verhindern
             log.exception("Ansagen-Feld der Pausenfolie nicht lesbar")
             self.pausentimer_panel.set_box(None)
-        if hasattr(self, "side_panel"):                  # Bilder-Feld rechts an die neue Feldhöhe anpassen
+        if hasattr(self, "side_panel"):                  # Fensterhöhe und Bilder-Feld an die neue Feldhöhe anpassen
+            if self.pausentimer_panel.is_open():
+                self._on_pausentimer_toggled(True)
             QTimer.singleShot(0, lambda: self.side_panel.align_field(self.pausentimer_panel.text_edit))
 
     def _on_pausentimer_start_clicked(self):
