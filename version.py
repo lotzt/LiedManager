@@ -5,5 +5,9 @@ GITHUB_REPO bleibt leer: tools/build_assets.py trägt es beim Bauen auf GitHub a
 (aus RELEASES_REPOSITORY, sonst GITHUB_REPOSITORY). Der Auto-Updater fragt dort die Releases ab; ohne Eintrag ist er aus.
 """
 APP_NAME = "LiedManager"
+<<<<<<< Updated upstream
 __version__ = "2.1.9"
+=======
+__version__ = "2.2.0"
+>>>>>>> Stashed changes
 GITHUB_REPO = ""   # „besitzer/LiedManager“ – wird beim Build gesetzt
