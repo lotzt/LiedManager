@@ -14,6 +14,7 @@ import threading
 import time
 
 from services.settings import app_settings
+from services.settings_keys import KEY_ATEM_ENABLED, KEY_ATEM_IP
 
 log = logging.getLogger(__name__)
 
@@ -110,9 +111,9 @@ def switch(kind: str) -> None:
     Tut nichts, wenn die Ansteuerung deaktiviert ist, kein ATEM-Modul vorhanden ist oder keine IP gesetzt wurde.
     """
     settings = app_settings()
-    if not settings.value("atem_enabled", False, type=bool) or not available():
+    if not settings.value(KEY_ATEM_ENABLED, False, type=bool) or not available():
         return
-    ip = settings.value("atem_ip", DEFAULT_IP, type=str).strip()
+    ip = settings.value(KEY_ATEM_IP, DEFAULT_IP, type=str).strip()
     if not ip:
         return
     key, default = CHANNELS[kind]

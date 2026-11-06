@@ -1017,7 +1017,7 @@ def main() -> int:
 
     dialog = SettingsDialog(window)
     dialog.show()
-    for index, name in enumerate(("allgemein", "pausentimer", "lieder", "audio", "kamera", "remote")):
+    for index, name in enumerate(("allgemein", "pausentimer", "lieder", "audio", "kamera", "mischpult", "remote")):
         dialog.tab_group.button(index).click()
         settle()
         dialog.grab().save(str(SHOTS / f"05_einstellungen_{name}.png"))
@@ -1032,6 +1032,8 @@ def main() -> int:
     dialog.tab_group.button(4).click()
     settle()
     assert abs(dialog.cam1_combo.width() - dialog.cam2_combo.width()) <= 1, "Kamera 1 und 2 müssen gleich breit sein"
+    assert dialog.permanent_camera_combo.count() == 3, "Dauerhafte Ausgabe: Aus / Kamera 1 / Kamera 2"
+    assert dialog.permanent_screen_combo.count() >= 1, "Dauerhafte Ausgabe: Bildschirme fehlen"
     dialog.tab_group.button(3).click()
     settle()
     assert abs(dialog.audio_device_combo.width() - dialog.mic_device_combo.width()) <= 1, "Ausgabe und Eingabe gleich breit"
@@ -1043,6 +1045,19 @@ def main() -> int:
 
     from ui.side_panel import TAB_CAMERA, TAB_IMAGES
     camera_panel = window.camera_panel
+    # Dauerhafte Ausgabe: ohne laufende Kamera bzw. mit unbekanntem Bildschirm öffnet sich nichts
+    from services.settings import app_settings as _app_settings
+    from PyQt6.QtWidgets import QApplication as _QApp
+    from ui.camera_panel import KEY_PERMANENT_CAMERA, KEY_PERMANENT_SCREEN
+    _s = _app_settings()
+    _s.setValue(KEY_PERMANENT_CAMERA, 1)
+    _s.setValue(KEY_PERMANENT_SCREEN, _QApp.screens()[0].name())
+    camera_panel.apply_permanent_output()
+    assert camera_panel.permanent_output() is None, "ohne laufende Kamera darf keine dauerhafte Ausgabe aufgehen"
+    _s.setValue(KEY_PERMANENT_SCREEN, "gibt-es-nicht")
+    camera_panel.apply_permanent_output()
+    assert camera_panel.permanent_output() is None, "unbekannter Bildschirm: nichts ausgeben"
+    _s.setValue(KEY_PERMANENT_CAMERA, 0)
     assert window.side_panel.current_tab() == TAB_CAMERA, "Seitenleiste muss mit dem Reiter Kamera starten"
     assert camera_panel.isVisible(), "Kamera-Panel ist nicht sichtbar"
     assert all(slot.focusPolicy() == Qt.FocusPolicy.ClickFocus for slot in camera_panel.slots), \
@@ -1266,6 +1281,8 @@ def main() -> int:
     assert log_file.read_text(encoding="utf-8").splitlines()[3:] == ["", "Sonntag, 25.10.2026", "7 – Neuer Tag", "8"]
     assert _songlog.format_day(_dt0.date(2026, 10, 21)) == "Mittwoch, 21.10.2026"
     # sonntags 9–10 Uhr / mittwochs 18:30–19:30 Uhr: in der Historie, aber mit „[nicht melden]“
+    assert _songlog.no_report_windows() == [], "Standard: keine Zeiten ohne Meldung"
+    _ss().setValue(_songlog.KEY_NO_REPORT, "So 09:00–10:00; Mi 18:30–19:30")
     assert _songlog.record("9", "Kinderstunde", at=_dt0.datetime(2026, 10, 25, 9, 15))
     assert _songlog.record("10", "Bibelstunde", at=_dt0.datetime(2026, 10, 28, 19, 0))
     assert _songlog.record("11", "Nachmittag", at=_dt0.datetime(2026, 10, 28, 20, 0))
@@ -1353,17 +1370,19 @@ def main() -> int:
     dlg = _SD(window)
     assert dlg.autostart_checkbox.isChecked() == _autostart.is_enabled(), "Autostart-Häkchen zeigt den falschen Zustand"
     assert dlg.no_report_input.text() == _songlog.format_windows(_songlog.no_report_windows()), "Zeitfenster fehlen im Dialog"
-    assert _songlog.parse_windows("So 9:00-10:00; Mittwoch 18.30–19.30 Uhr") == list(_songlog.NO_REPORT_WINDOWS)
+    assert _songlog.parse_windows("So 9:00-10:00; Mittwoch 18.30–19.30 Uhr") == \
+        [(6, _dt0.time(9, 0), _dt0.time(10, 0)), (2, _dt0.time(18, 30), _dt0.time(19, 30))]
     assert dlg.ccli_report_btn.toolTip() and not hasattr(dlg, "ccli_export_btn") and not hasattr(dlg, "ccli_numbers_btn")
     dlg.close()
 
-    test_updater_logic(tmp)
-    test_server_sync(tmp)
-    test_remote_relay(tmp)
-    test_remote_site()
-    test_new_features(tmp)
-    test_xair()
-    test_history_and_problem_report(tmp)
+    if not os.environ.get("SMOKE_SKIP_LOGIC"):       # unter pytest laufen diese Prüfungen als eigene Tests (tests/)
+        test_updater_logic(tmp)
+        test_server_sync(tmp)
+        test_remote_relay(tmp)
+        test_remote_site()
+        test_new_features(tmp)
+        test_xair()
+        test_history_and_problem_report(tmp)
     assert not UpdateController(window, repo="").available, "ohne Repository muss der Updater aus sein"
     dialog = SettingsDialog(window, updates_available=False)
     assert not dialog.update_check_btn.isEnabled() and "nicht eingerichtet" in dialog.update_status_label.text()
@@ -1534,7 +1553,7 @@ def main() -> int:
     dialog = _SettingsDialog(window)
     assert not hasattr(dialog, "remote_checkbox"), "der lokale Webserver ist entfernt"
     tab_names = [dialog.tab_group.button(i).text() for i in range(len(dialog.tab_group.buttons()))]
-    assert tab_names == ["Allgemein", "Pausentimer", "Lieder", "Audio", "Kamera", "Remote"], tab_names
+    assert tab_names == ["Allgemein", "Pausentimer", "Lieder", "Audio", "Kamera", "Mischpult", "Remote"], tab_names
     page = dialog.pages.widget
     assert page(0).isAncestorOf(dialog.update_checkbox) and page(0).isAncestorOf(dialog.autostart_checkbox)
     assert page(0).isAncestorOf(dialog.screen_combo)
@@ -1542,9 +1561,10 @@ def main() -> int:
     assert page(2).isAncestorOf(dialog.db_path_input) and page(2).isAncestorOf(dialog.sync_url_input)
     assert page(2).isAncestorOf(dialog.songlog_checkbox) and page(2).isAncestorOf(dialog.ccli_report_btn)
     assert page(3).isAncestorOf(dialog.rec_path_input) and page(3).isAncestorOf(dialog.wp_checkbox)
-    assert page(3).isAncestorOf(dialog.xair_ip_input)
-    assert page(4).isAncestorOf(dialog.cam1_combo) and page(4).isAncestorOf(dialog.atem_ip_input)
-    assert page(5).isAncestorOf(dialog.site_url_input) and not page(2).isAncestorOf(dialog.site_checkbox)
+    assert page(4).isAncestorOf(dialog.cam1_combo) and page(4).isAncestorOf(dialog.permanent_screen_combo)
+    assert page(5).isAncestorOf(dialog.atem_ip_input) and page(5).isAncestorOf(dialog.xair_ip_input), \
+        "ATEM und X AIR gehören zusammen in den Reiter Mischpult"
+    assert page(6).isAncestorOf(dialog.site_url_input) and not page(2).isAncestorOf(dialog.site_checkbox)
     for key in LEGACY_KEYS:                                   # alte Einstellungen (auch die PIN im Klartext) werden entfernt
         app_settings().setValue(key, "alt")
     window.remote.configure()

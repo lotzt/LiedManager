@@ -10,6 +10,7 @@ from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSource, QMediaDevices
 
 from services import devices
 from services.settings import app_settings
+from services.settings_keys import KEY_RECORDING_PATH
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def recordings_dir() -> str:
         QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation),
         "LiedManager Aufnahmen",
     )
-    path = str(app_settings().value("recording_path", default))
+    path = str(app_settings().value(KEY_RECORDING_PATH, default))
     if not path.strip():
         path = default
     os.makedirs(path, exist_ok=True)

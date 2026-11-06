@@ -21,8 +21,11 @@ from paths import user_data_dir
 from services import atem, xair
 from services.recorder import IDLE
 from services.remote_common import RemoteError
-from services.remote_relay import KEY_DEVICE_NAME, RelayClient, device_name, forget_old_name  # noqa: F401  (auch für den Einstellungsdialog)
+from services.remote_relay import (  # noqa: F401  (auch für den Einstellungsdialog)
+    KEY_DEVICE_NAME, RelayClient, device_name, forget_old_name,
+)
 from services.settings import app_settings
+from services.settings_keys import KEY_ATEM_ENABLED
 from services.web_remote_page import REQUIRED_VALUES
 from ui import theme
 from ui.pausentimer_panel import PausentimerPanel
@@ -297,7 +300,7 @@ class RemoteController(QObject):
                                  for p in paths]},
             "gallery": ({"index": gallery.current_index, "count": gallery.image_count} if gallery is not None else None),
             "cameras": cameras,
-            "atem": {"enabled": bool(settings.value("atem_enabled", False, type=bool)),
+            "atem": {"enabled": bool(settings.value(KEY_ATEM_ENABLED, False, type=bool)),
                      "channels": {kind: settings.value(key, default, type=int)
                                   for kind, (key, default) in atem.CHANNELS.items()}},
             "mixer": xair.state(),

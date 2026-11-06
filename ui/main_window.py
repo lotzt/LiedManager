@@ -11,8 +11,8 @@ import os
 from PyQt6.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+    QStackedWidget, QWidget,
 )
 
 from database import DatabaseManager
@@ -21,7 +21,9 @@ from services import atem, songlog, xair
 from services.gong import Gong
 from services.playback import AudioPlayback
 from services.recorder import AudioRecorder
+from services.screens import beamer_screen_index
 from services.settings import app_settings
+from services.settings_keys import KEY_AUDIO_1_NAME, KEY_AUDIO_2_NAME, KEY_MAIN_WINDOW_X, KEY_MAIN_WINDOW_Y
 from ui import theme as t
 from ui import widgets as w
 from ui.camera_panel import CameraPanel
@@ -36,19 +38,32 @@ from ui.recording_upload_ui import RecordingUploader
 from ui.settings_dialog import SettingsDialog
 from ui.side_panel import TAB_IMAGES, SidePanel
 from ui.sync_ui import SyncController
-from ui.web_remote_ui import RemoteController
 from ui.updater_ui import UpdateController
+from ui.web_remote_ui import RemoteController
 
 log = logging.getLogger(__name__)
 
 BTN, GAP = t.BTN, t.GAP
 
 
+
+DEFAULT_AUDIO_NAMES = ("Audio 1", "Audio 2")
+
+def audio_names() -> tuple:
+    """Anzeigenamen der zwei Audiospuren eines Lieds (leer = „Audio 1“ / „Audio 2“)."""
+    settings = app_settings()
+    first = str(settings.value(KEY_AUDIO_1_NAME, "", type=str)).strip() or DEFAULT_AUDIO_NAMES[0]
+    second = str(settings.value(KEY_AUDIO_2_NAME, "", type=str)).strip() or DEFAULT_AUDIO_NAMES[1]
+    return first, second
+
 class MainWindow(QMainWindow):
     """PyQt6-Hauptfenster des LiedManager 2.0."""
 
     AUDIO_EMPTY, AUDIO_SELECT, AUDIO_PLAYER, AUDIO_NOTFOUND = range(4)
-    AUDIO_NAMES = ("Piano", "GL3")  # Anzeigenamen von Audio 1 und Audio 2
+    @property
+    def AUDIO_NAMES(self) -> tuple:  # noqa: N802  (Name bleibt: auch die Remote-Steuerung liest ihn)
+        """Anzeigenamen von Audio 1 und Audio 2 (Einstellungen → Audio)."""
+        return audio_names()
 
     WIDTH = 396
     FRAME_L, FRAME_R, FRAME_V = 6, 12, 12      # Abstand des Rahmens: links (zur Seitenleiste), rechts, oben/unten
@@ -349,7 +364,7 @@ class MainWindow(QMainWindow):
     def _restore_position(self):
         """Öffnet das Fenster dort, wo es zuletzt stand – sofern dieser Platz noch auf einem Bildschirm liegt."""
         settings = app_settings()
-        x, y = settings.value("main_window_x", None), settings.value("main_window_y", None)
+        x, y = settings.value(KEY_MAIN_WINDOW_X, None), settings.value(KEY_MAIN_WINDOW_Y, None)
         try:
             x, y = int(x), int(y)
         except (TypeError, ValueError):
@@ -363,8 +378,8 @@ class MainWindow(QMainWindow):
 
     def _save_position(self):
         settings = app_settings()
-        settings.setValue("main_window_x", self.x())
-        settings.setValue("main_window_y", self.y())
+        settings.setValue(KEY_MAIN_WINDOW_X, self.x())
+        settings.setValue(KEY_MAIN_WINDOW_Y, self.y())
 
     def closeEvent(self, event):
         self._save_position()
@@ -540,6 +555,8 @@ class MainWindow(QMainWindow):
             self._update_title()
             self._apply_announcement_box()
             self.camera_panel.update_streams_from_settings()
+            self.pill_audio1.setText(self.AUDIO_NAMES[0])
+            self.pill_audio2.setText(self.AUDIO_NAMES[1])
             self.playback.apply_output_device()
             self.gong.apply_output_device()
             self._reload_database_if_changed()
@@ -705,7 +722,7 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         atem.switch("presentation")
-        screen_index = app_settings().value("beamer_screen", 0, type=int)
+        screen_index = beamer_screen_index()
         self.close_beamer_windows()      # neues Bild ersetzt alles, was vorher auf dem Beamer war
         self.gallery_window = GalleryWindow(paths, start_index, screen_index, main_window=self)
         self.gallery_window.close_requested.connect(self._on_gallery_close_requested)
@@ -751,7 +768,7 @@ class MainWindow(QMainWindow):
         atem.switch("presentation")
         if self.current_song_summary is not None:
             songlog.record(self.current_song_summary.nummer, self.current_song_summary.titel)
-        screen_index = app_settings().value("beamer_screen", 0, type=int)
+        screen_index = beamer_screen_index()
         self.close_beamer_windows(keep="presentation")   # Galerie und Kamera-Vollbild weichen dem Lied
 
         if self.presentation_window is None:

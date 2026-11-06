@@ -18,6 +18,7 @@ from PyQt6.QtCore import QObject, QProcess, QTime, QTimer, pyqtSignal
 from paths import custom_pausentimer_dir
 from services import atem, power
 from services.settings import app_settings
+from services.settings_keys import KEY_PRESENTATION_SEASON
 
 log = logging.getLogger(__name__)
 
@@ -512,7 +513,7 @@ class PausentimerController(QObject):
         if not supported():
             self.error.emit("Der Pausentimer wird nur unter macOS und Windows unterstützt.")
             return
-        season = app_settings().value("presentation_season", "frühling", type=str)
+        season = app_settings().value(KEY_PRESENTATION_SEASON, "frühling", type=str)
         source = template_path(season)
         if not source.exists():
             self.error.emit(f"Keine Pausenfolie gefunden: „{source.name}“.\n\nLege deine PowerPoint-Vorlage unter diesem Namen in "

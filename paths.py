@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+from services.settings_keys import KEY_DATABASE_PATH
+
 FROZEN = bool(getattr(sys, "frozen", False))
 
 # Mitgelieferte Dateien (Assets, Schriften): neben dem Code bzw. im PyInstaller-Paket
@@ -27,7 +29,7 @@ def custom_db_path() -> str:
     """In den Einstellungen gewählte Datenbank (leer = automatisch suchen)."""
     try:
         from services.settings import app_settings  # erst hier: paths.py selbst braucht kein Qt
-        return str(app_settings().value("database_path", "", type=str)).strip()
+        return str(app_settings().value(KEY_DATABASE_PATH, "", type=str)).strip()
     except Exception:
         return ""
 

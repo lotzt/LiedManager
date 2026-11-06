@@ -48,7 +48,7 @@ Dort hinein gehören `LiedManager.db` (beim ersten Start fragt das Programm dana
 Pausenfolien im Unterordner `pausentimer` (werden nicht mitgeliefert, jeder legt seine eigenen dort ab). Dort liegt auch `liedmanager.log`.
 
 ## Automatische Updates im Programm
-Das Programm fragt beim Start (abschaltbar unter Einstellungen → Daten) bei GitHub nach dem neuesten Release und
+Das Programm fragt beim Start (abschaltbar unter Einstellungen → Allgemein → Programm) bei GitHub nach dem neuesten Release und
 vergleicht es mit seiner Versionsnummer. Gibt es eine neuere, bietet es an, den Installer herunterzuladen:
 - **Windows:** LiedManager beendet sich, der Installer läuft im stillen Modus (nur ein Fortschrittsbalken) und startet das Programm danach neu.
 - **Mac:** LiedManager beendet sich, ein Hilfsskript ersetzt die App und startet sie neu (Protokoll: `~/Library/Logs/LiedManager-Update.log`).

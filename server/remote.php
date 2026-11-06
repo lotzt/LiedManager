@@ -170,7 +170,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     </div>
     <div id="mixerCard" class="card" hidden>
       <div class="caption">Mischpult (X AIR) <span id="mixerState" class="chip" title="Verbindung zum Mischpult">…</span></div>
-      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Audio → „Behringer X AIR“ (IP-Adresse eintragen).</p>
+      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Mischpult → „Behringer X AIR“ (IP-Adresse eintragen).</p>
       <div id="mixerList"></div>
       <button id="mixerMuteAll" type="button" class="pill" title="Alle acht Kanäle stummschalten">Alles stumm</button>
     </div>

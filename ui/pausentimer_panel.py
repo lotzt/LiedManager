@@ -5,11 +5,10 @@ import sys
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTime, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QFontMetricsF
-from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLineEdit, QPlainTextEdit, QVBoxLayout,
-)
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLineEdit, QPlainTextEdit, QVBoxLayout
 
 from services.settings import app_settings
+from services.settings_keys import KEY_PAUSE_TEXT
 from ui import theme as t
 from ui import widgets as w
 
@@ -176,7 +175,7 @@ class PausentimerPanel(QFrame):
         self.text_height = self.MAX_LINES * QFontMetrics(font).lineSpacing() + 2 * 8 + 2 + 2 + 14   # 14 = Luft, damit nie gescrollt wird
         self.text_edit.setFixedHeight(self.text_height)
 
-        saved_text = str(settings.value("pause_text", ""))          # keine vorausgefüllten Ansagen
+        saved_text = str(settings.value(KEY_PAUSE_TEXT, ""))          # keine vorausgefüllten Ansagen
         self.text_edit.setPlainText(self._clamp(saved_text))
         self._last_text = self.text_edit.toPlainText()
         self._apply_field_style(font.pixelSize())
@@ -319,7 +318,7 @@ class PausentimerPanel(QFrame):
                 self.text_edit.setTextCursor(cursor)
                 self.text_edit.blockSignals(False)
             self._last_text = self.text_edit.toPlainText()
-            app_settings().setValue("pause_text", self._last_text)
+            app_settings().setValue(KEY_PAUSE_TEXT, self._last_text)
             return
         lines = text.split("\n")
         if len(lines) > self.MAX_LINES or any(len(line) > self.MAX_CHARS for line in lines):
@@ -331,7 +330,7 @@ class PausentimerPanel(QFrame):
             cursor.setPosition(min(pos, len(new_text)))
             self.text_edit.setTextCursor(cursor)
             self.text_edit.blockSignals(False)
-        app_settings().setValue("pause_text", self.text_edit.toPlainText())
+        app_settings().setValue(KEY_PAUSE_TEXT, self.text_edit.toPlainText())
 
     def eventFilter(self, obj: QObject, event) -> bool:
         """Verhindert schon beim Tippen mehr als MAX_LINES Zeilen bzw. MAX_CHARS Zeichen pro Zeile."""

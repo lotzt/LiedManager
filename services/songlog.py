@@ -23,10 +23,7 @@ KEY_TEST_MODE = "songlog_test_mode"
 NO_REPORT_MARK = "[nicht melden]"
 KEY_NO_REPORT = "ccli_no_report_windows"
 # (Wochentag 0 = Montag … 6 = Sonntag, von, bis) – in diesen Zeiten gespielte Lieder werden nicht bei CCLI gemeldet
-NO_REPORT_WINDOWS = (
-    (6, datetime.time(9, 0), datetime.time(10, 0)),       # Sonntag 9:00–10:00
-    (2, datetime.time(18, 30), datetime.time(19, 30)),    # Mittwoch 18:30–19:30
-)
+NO_REPORT_WINDOWS = ()   # Standard: alles melden; Zeiten ohne Meldung stellt jede Gemeinde selbst ein
 _DAY_SHORT = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 _WINDOW = re.compile(r"^\s*([A-Za-zÄÖÜäöü]+)\.?\s+(\d{1,2})[:.](\d{2})\s*[-–]\s*(\d{1,2})[:.](\d{2})\s*(?:uhr)?\s*$", re.IGNORECASE)
 
