@@ -15,6 +15,12 @@ from ui import widgets as w
 DEFAULT_END_TIME = QTime(11, 30)   # Endzeit der Pause: immer wieder 11:30
 
 
+def set_small_tabs(edit) -> None:
+    """Tab-Abstand eines Textfelds auf die Breite des Tab-Zeichens in seiner Schrift setzen (wie auf der Folie)."""
+    metrics = QFontMetricsF(edit.font())
+    width = metrics.horizontalAdvance("\t") or metrics.horizontalAdvance(" ")
+    edit.setTabStopDistance(max(1.0, width))
+
 
 class TimeField(QLineEdit):
     """Uhrzeit-Feld „HH:mm“ – ein einfaches Textfeld statt QTimeEdit: QTimeEdit zeigte unter Windows (mit eigenem Stil
@@ -161,6 +167,7 @@ class PausentimerPanel(QFrame):
         while too_wide() and font.pixelSize() > 9:
             font.setPixelSize(font.pixelSize() - 1)
         self.text_edit.setFont(font)
+        self._sync_tab_width()
         self._default_font = QFont(font)
         self.text_edit.setToolTip("Eine Zeile pro Ansage")
         self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -194,6 +201,12 @@ class PausentimerPanel(QFrame):
         if not font_px:
             style = re.sub(r"font-size:\s*[0-9.]+px;", "", style)
         self.text_edit.setStyleSheet(style)
+        self._sync_tab_width()
+
+    def _sync_tab_width(self) -> None:
+        """Tab im Feld so breit wie auf der Pausenfolie: Dort wird ein Tab nicht bis zum nächsten Tab-Stopp (Standard
+        80 px) aufgezogen, sondern ist nur so breit wie das Zeichen selbst – also hier dieselbe Breite verwenden."""
+        set_small_tabs(self.text_edit)
 
     def set_box(self, box) -> None:
         """Ansagen-Feld der Pausenfolie übernehmen: Das Eingabefeld bekommt dessen Seitenverhältnis und die Schrift im
@@ -204,6 +217,7 @@ class PausentimerPanel(QFrame):
         self.text_edit.setFixedHeight(self.text_height)
         if box is None:
             self.text_edit.setFont(self._default_font)
+            self._sync_tab_width()
             self._apply_field_style(self._default_font.pixelSize())
             self.text_edit.setPlaceholderText(f"Ansagen (max. {self.MAX_LINES} Zeilen / {self.MAX_CHARS} Zeichen)")
         else:
@@ -243,6 +257,7 @@ class PausentimerPanel(QFrame):
         used_w = QFontMetricsF(font).horizontalAdvance(sample) / beamer * box.width
         extra_x = max(0, int((inner_w - used_w) / 2))
         self.text_edit.setFont(font)
+        self._sync_tab_width()
         self._apply_field_style(0, f"{self.PAD_Y}px {self.PAD_X + extra_x}px")
         # Qt setzt jede Zeile auf ganze Pixel (aufgerundet) – dazu etwas Luft, damit die letzte Zeile nie angeschnitten wird
         line = math.ceil(QFontMetricsF(font).lineSpacing())
