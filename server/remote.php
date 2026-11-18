@@ -17,12 +17,12 @@
  * geht zurück an den Browser. Das Programm muss dafür laufen und online sein.
  */
 
-const TOKEN   = 'tytcin-wyQxa7-vehtyd-xixqUh-dyrpy1-hamvif-jhgF72';
-const PIN     = '06973479';
+const TOKEN   = 'HIER-LANGES-ZUFAELLIGES-TOKEN';
+const PIN     = 'HIER-PASSWORT-FUER-DEN-BROWSER';
 const DB_HOST = 'localhost';
-const DB_NAME = 'd048a7cd';
-const DB_USER = 'd048a7cd';
-const DB_PASS = 'firxuq-munvov-0wUtca';
+const DB_NAME = 'dXXXXXXX';
+const DB_USER = 'dXXXXXXX';
+const DB_PASS = 'HIER-DB-PASSWORT';
 
 const FORMAT         = 1;          // Protokollversion (Programm und Website müssen zusammenpassen)
 const APP_TIMEOUT    = 25;         // so lange ohne Lebenszeichen gilt das Programm als nicht erreichbar (Sekunden)
