@@ -12,32 +12,16 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import (
-    QAbstractAnimation,
-    QObject,
-    QPointF,
-    QRectF,
-    Qt,
-    QTime,
-    QTimer,
-    QUrl,
-    QVariantAnimation,
-    pyqtSignal,
+    QAbstractAnimation, QObject, QPointF, QRectF, Qt, QTime, QTimer, QUrl, QVariantAnimation, pyqtSignal,
 )
-from PyQt6.QtGui import (
-    QColor,
-    QFont,
-    QFontDatabase,
-    QFontMetricsF,
-    QImage,
-    QImageReader,
-    QPainter,
-    QPixmap,
-)
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QImageReader, QPainter, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from services import atem, devices, pausenfolie, power
+from services.screens import beamer_screen_index
 from services.settings import app_settings
+from services.settings_keys import KEY_PRESENTATION_SEASON
 
 log = logging.getLogger(__name__)
 
@@ -408,7 +392,7 @@ class NativePausentimer(QObject):
     def start(self, lines, end_time: QTime) -> None:
         if self._running:
             return
-        season = app_settings().value("presentation_season", "frühling", type=str)
+        season = app_settings().value(KEY_PRESENTATION_SEASON, "frühling", type=str)
         design = pausenfolie.load(season)
         if design is None:
             self.error.emit(f"Für „{season}“ ist noch keine Pausenfolie eingerichtet.\n\nEinstellungen → Pausentimer → "
@@ -421,7 +405,7 @@ class NativePausentimer(QObject):
         self._end_time = end_time
         self._finish = self._compute_finish()
         self._music_started = False
-        screen_index = app_settings().value("beamer_screen", 0, type=int)
+        screen_index = beamer_screen_index()
         self._window = PauseWindow(PauseRenderer(design), screen_index)
         # Esc beendet die Pause bewusst nicht – nur der Knopf (oder die Remote), damit sie nicht versehentlich endet
         self._window.texts = self._texts               # Ansagen gleich beim Start (nicht erst beim nächsten Wechsel)
@@ -549,7 +533,7 @@ def announcement_box(season: str = None):
     """``AnnouncementBox`` der eingestellten Jahreszeit – oder ``None`` (PowerPoint-Modus, keine Vorlage, kein Feld)."""
     if pause_mode() != "liedmanager":
         return None
-    season = season or app_settings().value("presentation_season", "frühling", type=str)
+    season = season or app_settings().value(KEY_PRESENTATION_SEASON, "frühling", type=str)
     design = pausenfolie.load(season)
     if design is None:
         return None
@@ -617,7 +601,7 @@ class Pausentimer(QObject):
         if pause_mode() == "powerpoint":
             self._active = self._powerpoint
         else:
-            season = app_settings().value("presentation_season", "frühling", type=str)
+            season = app_settings().value(KEY_PRESENTATION_SEASON, "frühling", type=str)
             design, problem = ensure_design(season)
             if design is None:
                 self.error.emit(problem)

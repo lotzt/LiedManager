@@ -3,6 +3,35 @@
 Programm für den Gottesdienst: Lieder suchen und auf dem Beamer zeigen, Predigt aufnehmen,
 Kameras und ATEM-Mischer steuern sowie Pausentimer abspielen. Läuft auf Windows und macOS.
 
+## Für andere Gemeinden
+
+LiedManager ist frei (MIT-Lizenz) und für jede Gemeinde nutzbar. Gebraucht wird nur die Lieder-Datenbank, alles
+andere ist freiwillig und lässt sich in den Einstellungen einzeln einschalten:
+
+| Teil | Nötig? | Wofür |
+|---|---|---|
+| `LiedManager.db` (SQLite) | ja | Lieder mit Nummer, Titel, Text, bis zu zwei Audiodateien und vier Bildern |
+| Kameras (USB/HDMI-Capture) | nein | Live-Bild in der Seitenleiste, Vollbild auf dem Beamer, dauerhafte Ausgabe |
+| ATEM-Mischer, Behringer X AIR | nein | Bild umschalten bzw. Ton über die Remote-Steuerung |
+| Eigene Website mit PHP und MySQL | nein | Abgleich mehrerer Geräte (`server/sync.php`), Steuerung per Handy (`server/remote.php`) |
+| WordPress | nein | Predigt-Aufnahmen automatisch in die Mediathek |
+| CCLI-Lizenz | nein | Gespielte Lieder bei CCLI melden |
+
+**Aufbau der Datenbank:** eine Tabelle `Data` mit den Spalten `nummer`, `alias`, `titel`, `lyrics`, `audio1`, `audio2`
+(Audiodateien als BLOB) und `bild1` bis `bild4` (Bilder als BLOB); optional eine Spalte mit „ccli“ im Namen für die
+CCLI-Nummern. Die Nummern sind frei wählbar – ein Kürzel vor der Nummer (z. B. `p012`) kann ein Liederbuch kennzeichnen.
+Die Namen der zwei Audiospuren (z. B. „Piano“ und „Gesang“) stehen unter *Einstellungen → Audio*.
+
+**Ausprobieren:** `beispiel/LiedManager-Beispiel.db` enthält sechs gemeinfreie Lieder mit Beamer-Bild, einen Verweis
+(Nummer 100 → Lied 1) und eine leere CCLI-Spalte. Unter *Einstellungen → Lieder → Datenbank* auswählen oder als
+`LiedManager.db` neben das Programm legen. Neu erzeugen: `python tools/make_example_db.py` (braucht Pillow).
+
+**Beamer-Bild:** Auf dem Beamer erscheinen die Bilder des Lieds (`bild1` bis `bild4`, z. B. Noten oder Text als PNG/JPG,
+auch als Base64 oder SVG). Der Liedtext (`lyrics`) dient der Suche.
+
+`tools/ccli_aus_liederbuch.py` ist ein Beispiel und auf bestimmte Liederbücher zugeschnitten (Glaubenslieder, Feiert Jesus) und dient
+als Vorlage, falls CCLI-Nummern aus einer Liederbuch-Website übernommen werden sollen.
+
 ## Aus dem Quellcode starten
 
 ```
@@ -27,10 +56,10 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 
 **Server einrichten (einmalig):**
 
-1. KAS → *Datenbanken* → neue MySQL-Datenbank anlegen (Name, Benutzer, Passwort notieren).
+1. Beim Webhoster eine MySQL-Datenbank anlegen (bei All-Inkl: KAS → *Datenbanken*; Name, Benutzer, Passwort notieren).
 2. `server/sync.php` öffnen und oben `TOKEN` (selbst ausgedachtes, langes Zufallspasswort), `DB_NAME`, `DB_USER`
    und `DB_PASS` eintragen.
-3. Die Datei per WebFTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/sync/sync.php`
+3. Die Datei per FTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/sync/sync.php`
    (die Domain braucht SSL, also `https://`). Die Tabellen legt das Skript beim ersten Aufruf selbst an.
 
 **Auf jedem Gerät:**
@@ -73,7 +102,7 @@ nicht, zeigt die Seite „getrennt“.
 
 **Server einrichten (einmalig):**
 
-1. KAS → *Datenbanken*: MySQL-Datenbank anlegen oder die vom Abgleich mitbenutzen (die Tabellen heißen anders: `lm_rm_…`).
+1. Beim Webhoster eine MySQL-Datenbank anlegen oder die vom Abgleich mitbenutzen (die Tabellen heißen anders: `lm_rm_…`).
 2. `server/remote.php` öffnen und oben `TOKEN` (langes Zufallspasswort, kommt auch ins Programm), `PIN` (Passwort für den
    Browser, mindestens 8 Zeichen) sowie `DB_NAME`, `DB_USER`, `DB_PASS` eintragen.
 3. Per WebFTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/steuerung/remote.php` (mit SSL). Zum Prüfen
@@ -101,7 +130,7 @@ Server: `server/remote_template.php`.
 
 ### Behringer X AIR 18: Lautstärke und Mute über die Webseite
 
-Einstellungen → Audio → „Behringer X AIR“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
+Einstellungen → Mischpult → „Behringer X AIR“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
 IP). LiedManager spricht das Pult per OSC/UDP (Port 10024) an und muss im selben Netzwerk stehen; das Pult selbst braucht keinen Internetzugang.
 Die Web-Fernsteuerung zeigt dann im Reiter „Kamera“ die Kanäle 1–8 mit Namen, Regler (lauter/leiser, Anzeige in dB) und Mute-Knopf.
 Neue `remote.php` hochladen (Zugangsdaten oben erneut eintragen). Logik: `services/xair.py`. Nicht an einem echten Pult getestet –
@@ -135,7 +164,7 @@ Einstellungen → Audio → Aufnahmen (Adresse und Token wie bei der Remote-Steu
 die selbst nicht eingeschaltet sein muss). Jede gespeicherte Aufnahme wird in Stücken in den Ordner `aufnahmen` neben
 `remote.php` geladen; bricht die Verbindung ab, wird sie später fortgesetzt (Liste: `aufnahmen_hochladen.json` im
 Datenordner). Der Ordner ist nicht als Dateiliste einsehbar, die Dateien sind aber über ihre Adresse erreichbar –
-wer das nicht möchte, sollte den Ordner per KAS mit einem Passwort schützen. Nach dem Aktualisieren der Programmdatei
+wer das nicht möchte, sollte den Ordner beim Webhoster mit einem Passwort schützen. Nach dem Aktualisieren der Programmdatei
 `remote.php` neu hochladen (Zugangsdaten oben erneut eintragen).
 
 **Direkt in die WordPress-Mediathek:** Einstellungen → Audio → Aufnahmen → „Automatisch in die WordPress-Mediathek hochladen“. Eintragen: Adresse der
@@ -147,14 +176,21 @@ installiert, wird die WAV-Aufnahme vorher in eine MP3 (Mono, 64 kbit/s) umgewand
 
 ## Prüfen
 
-Bei jedem Push läuft `.github/workflows/tests.yml` auf macOS und Windows (Smoke-Test). Die Zugangsdaten (Token, Passwörter) liegen im Schlüsselbund des Systems (`pip install keyring`). Die Datenbank wird vor dem Abgleich gesichert (Ordner „Datenbank-Sicherungen“, letzte 5).
+Bei jedem Push läuft `.github/workflows/tests.yml` auf macOS und Windows (pytest). Die Zugangsdaten (Token, Passwörter) liegen im Schlüsselbund des Systems (`pip install keyring`). Die Datenbank wird vor dem Abgleich gesichert (Ordner „Datenbank-Sicherungen“, letzte 5).
 
 ```
-python tools/smoke_test.py
+pip install -r requirements-dev.txt
+pytest
 ```
 
-Startet die Oberfläche ohne Bildschirm, prüft die wichtigsten Abläufe und legt Screenshots in
-`build/screenshots` ab.
+`tests/test_logic.py` prüft die Abläufe ohne Fenster (Updater, Abgleich, Remote, X AIR …) einzeln,
+`tests/test_ui.py` startet die Oberfläche ohne Bildschirm (`tools/smoke_test.py`), prüft die wichtigsten Abläufe und legt
+Screenshots in `build/screenshots` ab. `python tools/smoke_test.py` läuft weiterhin auch allein (dann mit allen Abläufen).
+
+**Code-Aufbau:** Der Einstellungsdialog liegt in `ui/settings/` – je Reiter eine Datei (`general.py`, `songs.py`, `audio.py`,
+`camera.py`, `mixer.py`, `remote.py`), `form.py` enthält die Bausteine (Felder, Karten), `dialog.py` setzt alles zusammen
+und lädt/speichert. Einstellungsnamen, die an mehreren Stellen gebraucht werden, stehen in `services/settings_keys.py`;
+der Beamer-Bildschirm wird über seinen Namen gespeichert (`services/screens.py`).
 
 ## Installer bauen und neue Version veröffentlichen
 
@@ -202,13 +238,13 @@ Das Speichern lässt sich unter *Einstellungen → Lieder → Gespielte Lieder* 
 LiedManager meldet nicht selbst an CCLI (dafür ist eine Partner-Zulassung bei CCLI nötig). Stattdessen bereitet es die Meldung vor:
 
 1. Die CCLI-Nummern stehen in einer Spalte der Datenbank (Name enthält „ccli“, z. B. `CCLI`); sie werden mit dem Datenbank-Abgleich
-   geteilt. Zum Füllen aus den Liederbüchern von evangeliums.net gibt es `tools/ccli_aus_liederbuch.py` (siehe dort).
+   geteilt. Als Beispiel, wie man sie aus einer Liederbuch-Website übernimmt, liegt `tools/ccli_aus_liederbuch.py` bei (siehe dort).
 2. Beim Klick auf *„Bei CCLI melden“* kommen neu gespielte Lieder automatisch in die Meldeliste `CCLI-Meldung.csv`: nur die
    CCLI-Nummern, eine pro Zeile (neue hinter noch offene; dasselbe Lied am selben Tag einmal). `Gespielte Lieder.txt` (Liedhistorie)
    bleibt dabei unverändert; das Programm merkt sich, bis wohin schon übernommen wurde. Lieder ohne Nummer fehlen (die Statuszeile
-   zählt sie). Lieder von sonntags 9–10 Uhr und mittwochs 18:30–19:30 Uhr stehen mit „[nicht melden]“ in der Liste und werden
-   nicht gemeldet. Die Zeiten stellst du unter Einstellungen → Lieder → CCLI-Meldung → „Nicht melden (Zeiten)“ ein (z. B. `So 09:00–10:00; Mi 18:30–19:30`,
-   leer = alles melden).
+   zählt sie). Lieder aus Zeiten, die nicht gemeldet werden sollen (z. B. Kinderstunde), stehen mit „[nicht melden]“ in der Liste
+   und werden nicht gemeldet. Die Zeiten stellst du unter Einstellungen → Lieder → CCLI-Meldung → „Nicht melden (Zeiten)“ ein (z. B. `So 09:00–10:00; Mi 18:30–19:30`,
+   leer = alles melden; das ist der Standard).
 3. Danach öffnet sich CCLI „Suchen & Melden“ (https://reporting.ccli.com/search) in einem Browser (du loggst dich selbst ein, das Programm sieht keine Zugangsdaten),
    gibt jede Nummer ein, sucht und klickt „Lied melden“. Nach dem ersten Lied fragt es, ob alles stimmt (weiter / Rest automatisch /
    aufhören). Eingegeben wird nur die CCLI-Nummer. Gemeldete Nummern verschwinden sofort aus `CCLI-Meldung.csv`, nicht Gemeldete bleiben drin;

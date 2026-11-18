@@ -21,11 +21,13 @@ from paths import user_data_dir
 from services import atem, xair
 from services.recorder import IDLE
 from services.remote_common import RemoteError
-from services.remote_relay import KEY_DEVICE_NAME, RelayClient, device_name, forget_old_name  # noqa: F401  (auch für den Einstellungsdialog)
+from services.remote_relay import (  # noqa: F401  (auch für den Einstellungsdialog)
+    KEY_DEVICE_NAME, RelayClient, device_name, forget_old_name,
+)
 from services.settings import app_settings
+from services.settings_keys import KEY_ATEM_ENABLED
 from services.web_remote_page import REQUIRED_VALUES
 from ui import theme
-from ui.pausentimer_panel import PausentimerPanel
 from ui.side_panel import TAB_IMAGES
 from version import __version__
 
@@ -292,12 +294,12 @@ class RemoteController(QObject):
             "recording": {"state": w.recorder.state, "seconds": int(self._rec_seconds)},
             "pause": {"running": w.pausentimer.running, "end": panel.end_time().toString("HH:mm"),
                       "lines": panel.lines(), "seconds_left": w.pausentimer.seconds_left(),
-                      "max_lines": PausentimerPanel.MAX_LINES, "max_chars": PausentimerPanel.MAX_CHARS},
+                      "max_lines": panel.max_lines(), "max_chars": panel.max_chars()},
             "images": {"items": [{"name": os.path.basename(p), "key": hashlib.sha1(p.encode("utf-8")).hexdigest()[:10]}
                                  for p in paths]},
             "gallery": ({"index": gallery.current_index, "count": gallery.image_count} if gallery is not None else None),
             "cameras": cameras,
-            "atem": {"enabled": bool(settings.value("atem_enabled", False, type=bool)),
+            "atem": {"enabled": bool(settings.value(KEY_ATEM_ENABLED, False, type=bool)),
                      "channels": {kind: settings.value(key, default, type=int)
                                   for kind, (key, default) in atem.CHANNELS.items()}},
             "mixer": xair.state(),
@@ -457,14 +459,14 @@ class RemoteController(QObject):
         lines = args.get("lines", [])
         if not isinstance(lines, list):
             raise RemoteError("Ungültige Ansagen.", 400)
-        lines = [str(line)[:PausentimerPanel.MAX_CHARS] for line in lines[:PausentimerPanel.MAX_LINES]]
-        text = "\n".join(lines).rstrip("\n")
+        wanted = "\n".join(str(line)[:500] for line in lines[:50]).rstrip("\n")
+        text = panel.fit_text(wanted)           # dieselben Grenzen wie im Programm (mit Pausenfolie: Breite ihres Felds)
         if text != panel.text_edit.toPlainText():
             panel.text_edit.setPlainText(text)
         end = QTime.fromString(str(args.get("end", "")), "HH:mm")
         if end.isValid() and end != panel.end_time():
             panel.time_edit.setTime(end)
-        return {"ok": True}
+        return {"ok": True, "shortened": text != wanted}
 
     def _act_pause_toggle(self, args: dict) -> dict:
         self.window._on_pausentimer_start_clicked()

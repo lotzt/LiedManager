@@ -18,6 +18,7 @@ from paths import custom_pausentimer_dir
 from services import pausenfolie
 from services.settings import app_settings
 from ui import theme as t
+from ui.pausentimer_panel import set_small_tabs
 from ui.pause_window import KEY_MODE, MODES, pause_mode, preview_images
 from ui.widgets import round_combo_popup
 
@@ -75,6 +76,7 @@ class PauseSettings(QObject):
         self.verse_edit.setFixedHeight(84)
         self.verse_edit.setPlaceholderText("Bibelvers")
         self.verse_edit.setStyleSheet(t.input_style("QPlainTextEdit", "8px 12px"))
+        set_small_tabs(self.verse_edit)                    # Tab wie auf der Folie, nicht 80 px breit
         self.reference_edit = d._line_edit("z. B. Lukas 2,14")
 
         self.verse_minutes = d._spinbox(0, 60)

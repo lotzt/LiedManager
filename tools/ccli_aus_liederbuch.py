@@ -1,9 +1,18 @@
-"""Liest CCLI-Nummern aus den Liederbüchern von evangeliums.net und trägt sie direkt in die LiedManager-Datenbank ein.
+"""BEISPIEL: CCLI-Nummern aus Liederbuch-Seiten (hier evangeliums.net) lesen und in die LiedManager-Datenbank eintragen.
+
+Das Skript ist ein Beispiel und auf bestimmte Liederbücher eingestellt. Für andere Bücher oder eine andere Nummerierung
+die Liste ``BOOKS`` unten anpassen oder eine eigene Liste als JSON-Datei übergeben (``--buecher meine_buecher.json``):
+
+    [{"name": "Mein Liederbuch", "inhaltsseite": "https://www.evangeliums.net/lieder/liederbuch_….html",
+      "praefixe": ["m"]}]
+
+„praefixe“ sind die Buchstaben vor der Liednummer in der Datenbank (m012 = Lied 12); "" = Nummer ohne Buchstaben.
+Die Inhaltsseite muss eine evangeliums.net-Liederbuchseite sein (andere Seiten sind anders aufgebaut).
 
 Aufruf (im LiedManager-Ordner, LiedManager vorher beenden):   python3 tools/ccli_aus_liederbuch.py
 Die Datenbank wird automatisch gesucht; sonst:   python3 tools/ccli_aus_liederbuch.py --db "/Pfad/zu/LiedManager.db"
 
-Bücher und ihre Liednummern in der Datenbank:
+Voreingestellte Beispiel-Bücher und ihre Liednummern in der Datenbank:
     Glaubenslieder 2015 und 2024   Präfix p   (p012)
     Glaubenslieder 1 und 2         kein Präfix (12)
     Feiert Jesus – Best of         Präfix s   (s012)
@@ -40,14 +49,14 @@ from pathlib import Path
 
 BASE = "https://www.evangeliums.net/lieder/"
 BOOKS = (
-    # Name, Inhaltsseite, Präfixe der Liednummer in der Datenbank
+    # BEISPIEL – Name, Inhaltsseite, Präfixe der Liednummer in der Datenbank (anpassen oder --buecher verwenden)
     ("Glaubenslieder 2015", BASE + "liederbuch_glaubenslieder_2015.html", ("p",)),
     ("Glaubenslieder 2024", BASE + "liederbuch_glaubenslieder_2024.html", ("p",)),
     ("Glaubenslieder 1", BASE + "liederbuch_glaubenslieder.html", ("",)),
     ("Glaubenslieder 2", BASE + "liederbuch_glaubenslieder_2.html", ("",)),
     ("Feiert Jesus – Best of", BASE + "liederbuch_feiert_jesus_best_of.html", ("s",)),
 )
-HEADERS = {"User-Agent": "LiedManager-CCLI-Helfer (privat, wenige Anfragen pro Sekunde)"}
+HEADERS = {"User-Agent": "LiedManager-CCLI-Helfer (wenige Anfragen pro Sekunde)"}
 LINK = re.compile(r'<a\s[^>]*href="(?P<href>(?:https?://www\.evangeliums\.net/lieder/|/lieder/)?lied_[^"#?]+\.html)"[^>]*>(?P<text>.*?)</a>',
                   re.I | re.S)
 CCLI = re.compile(r"CCLI-?\s*(?:Nr|Nummer|Liednummer)\.?\s*:?\s*(\d{4,9})", re.I)
@@ -192,9 +201,16 @@ def clean_ccli(value) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
 
 
-def load_books(selection=None):
+def read_books_file(path: Path) -> tuple:
+    """Eigene Bücherliste aus einer JSON-Datei (Aufbau siehe oben)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return tuple((str(book["name"]), str(book["inhaltsseite"]), tuple(str(p).lower() for p in book.get("praefixe", [""])))
+                 for book in data)
+
+
+def load_books(selection=None, books_config=BOOKS):
     books = []
-    for name, toc, prefixes in BOOKS:
+    for name, toc, prefixes in books_config:
         if selection and not any(s.lower() in name.lower() for s in selection):
             continue
         print(f"Lade Inhaltsseite: {name} …")
@@ -212,6 +228,7 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, default=default_data_dir(), help="Ordner für Zwischenstand und Ergebnisse")
     parser.add_argument("--limit", type=int, default=0, help="nur N Liedseiten laden (zum Ausprobieren)")
     parser.add_argument("--buch", action="append", help="nur Bücher, deren Name dies enthält (mehrfach möglich)")
+    parser.add_argument("--buecher", type=Path, default=None, help="eigene Bücherliste (JSON, Aufbau siehe oben)")
     args = parser.parse_args()
     workers, delay = max(1, min(6, args.workers)), max(0.5, args.delay)
 
@@ -222,7 +239,7 @@ def main() -> int:
     conn = sqlite3.connect(str(db_path), timeout=30)
     rows, ccli_column = read_rows(conn)
     print(f"Datenbank: {db_path} ({len(rows)} Lieder)")
-    books = load_books(args.buch)
+    books = load_books(args.buch, read_books_file(args.buecher) if args.buecher else BOOKS)
     if not any(entries for _n, _p, entries in books):
         print("Auf den Inhaltsseiten wurden keine Lieder gefunden – die Seiten haben sich vermutlich geändert.")
         return 1

@@ -17,12 +17,12 @@
  * geht zurück an den Browser. Das Programm muss dafür laufen und online sein.
  */
 
-const TOKEN   = 'HIER-LANGES-ZUFAELLIGES-TOKEN';
-const PIN     = 'HIER-PASSWORT-FUER-DEN-BROWSER';
+const TOKEN   = 'tytcin-wyQxa7-vehtyd-xixqUh-dyrpy1-hamvif-jhgF72';
+const PIN     = '06973479';
 const DB_HOST = 'localhost';
-const DB_NAME = 'dXXXXXXX';
-const DB_USER = 'dXXXXXXX';
-const DB_PASS = 'HIER-DB-PASSWORT';
+const DB_NAME = 'd048a7cd';
+const DB_USER = 'd048a7cd';
+const DB_PASS = 'firxuq-munvov-0wUtca';
 
 const FORMAT         = 1;          // Protokollversion (Programm und Website müssen zusammenpassen)
 const APP_TIMEOUT    = 25;         // so lange ohne Lebenszeichen gilt das Programm als nicht erreichbar (Sekunden)
@@ -170,7 +170,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     </div>
     <div id="mixerCard" class="card" hidden>
       <div class="caption">Mischpult (X AIR) <span id="mixerState" class="chip" title="Verbindung zum Mischpult">…</span></div>
-      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Audio → „Behringer X AIR“ (IP-Adresse eintragen).</p>
+      <p id="mixerOff" class="muted" hidden>Das Mischpult ist aus. Einschalten: LiedManager → Einstellungen → Mischpult → „Behringer X AIR“ (IP-Adresse eintragen).</p>
       <div id="mixerList"></div>
       <button id="mixerMuteAll" type="button" class="pill" title="Alle acht Kanäle stummschalten">Alles stumm</button>
     </div>
@@ -430,7 +430,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 input.timeedit { width: 84px; flex: none; text-align: center; padding: 0 8px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 .chev { flex: none; border: 0; background: none; color: var(--muted); padding: 6px; font-size: 16px; display: flex; }
 .chev:hover { color: var(--text); }
-.pause textarea { margin: 0 0 4px; }
+.pause textarea { margin: 0 0 4px; tab-size: 1; -moz-tab-size: 1; }   /* Tab so schmal wie auf der Folie */
 
 /* Bilder, Kamera */
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
@@ -887,7 +887,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   var maxLines = 11, maxChars = 50;
   function clampLines() {
     var box = $('lines');
-    var lines = box.value.split('\n').slice(0, maxLines).map(function (l) { return l.slice(0, maxChars); });
+    var lines = box.value.split('\n').slice(0, maxLines).map(function (l) { return maxChars > 0 ? l.slice(0, maxChars) : l; });
     var text = lines.join('\n');
     if (text !== box.value) { box.value = text; }
   }
@@ -904,7 +904,8 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     title.classList.toggle('run', p.running);
     maxLines = p.max_lines;
     maxChars = p.max_chars;
-    $('lines').title = 'Ansagen für die Pausenfolie – eine Zeile pro Ansage (höchstens ' + p.max_lines + ' Zeilen mit je ' + p.max_chars + ' Zeichen)';
+    $('lines').title = 'Ansagen für die Pausenfolie – eine Zeile pro Ansage (höchstens ' + p.max_lines + ' Zeilen' +
+      (p.max_chars > 0 ? ' mit je ' + p.max_chars + ' Zeichen' : '; zu lange Zeilen werden passend gekürzt') + ')';
     if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = p.lines.join('\n'); }
     if (document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = p.end; }
   }
@@ -1054,7 +1055,8 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   });
 
   function sendPauseSettings() {
-    return act('pause_set', { lines: $('lines').value.split('\n'), end: $('endTime').value }, true).then(function () {
+    return act('pause_set', { lines: $('lines').value.split('\n'), end: $('endTime').value }, true).then(function (r) {
+      if (r && r.shortened) { toast('Zu lang für die Pausenfolie – passend gekürzt', true); }
       delete $('lines').dataset.dirty;
       delete $('endTime').dataset.dirty;
     });

@@ -10,6 +10,7 @@ from PyQt6.QtGui import QImage, QImageIOHandler, QImageReader, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from services.settings import app_settings
+from services.settings_keys import KEY_FULLSCREEN_MODE
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +186,7 @@ class ImagePresentationWindow(QWidget):
     def show_on_target_screen(self):
         """Zeigt das Fenster auf dem gewählten Bildschirm (Vollbild oder – laut Einstellung – als Fenster)."""
         screen = self._target_screen()
-        fullscreen = app_settings().value("fullscreen_mode", True, type=bool)
+        fullscreen = app_settings().value(KEY_FULLSCREEN_MODE, True, type=bool)
 
         if self._frameless != fullscreen:  # Fenster-Flags nur bei Moduswechsel ändern (vermeidet Flackern)
             flags = Qt.WindowType.Window

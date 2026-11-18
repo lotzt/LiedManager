@@ -2,14 +2,13 @@
 import logging
 
 from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCursor, QKeyEvent, QPainterPath, QRegion
+from PyQt6.QtGui import QCursor, QGuiApplication, QKeyEvent, QPainterPath, QRegion
 from PyQt6.QtMultimedia import QCamera, QMediaCaptureSession, QMediaDevices
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtWidgets import (
-    QApplication, QFrame, QLabel, QVBoxLayout, QWidget,
-)
+from PyQt6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
 
 from services import atem
+from services.screens import beamer_screen, find_screen
 from services.settings import app_settings
 from ui import theme as t
 from ui import widgets as w
@@ -22,6 +21,10 @@ SLOT_INSET = 4       # Abstand Rahmen -> Bild (schwarzer „Passepartout“, hä
 SLOT_RADIUS = t.RADIUS
 VIDEO_RADIUS = 8
 ASPECT_W, ASPECT_H = 16, 9   # typisches Kameraformat
+
+# Dauerhafte Ausgabe: eine Kamera läuft ständig im Vollbild auf einem festen Bildschirm (z. B. für Zoom oder einen Monitor)
+KEY_PERMANENT_CAMERA = "camera_permanent"            # 0 = aus, 1 = Kamera 1 (oben), 2 = Kamera 2 (unten)
+KEY_PERMANENT_SCREEN = "camera_permanent_screen"     # Name des Bildschirms (QScreen.name()), nicht die Nummer
 
 
 class CameraSlot(QFrame):
@@ -166,6 +169,38 @@ class FullscreenWindow(QWidget):
             super().keyPressEvent(event)
 
 
+class PermanentCameraWindow(QWidget):
+    """Kamerabild dauerhaft im Vollbild auf einem festen Bildschirm.
+
+    Läuft unabhängig vom Beamer-Bild: Esc und „Beamer schließen“ lassen es stehen. Es liegt nicht „immer oben“ –
+    ist es derselbe Bildschirm wie der Beamer, erscheinen Lieder, Bilder und Pausenfolie davor und die Kamera
+    ist wieder zu sehen, sobald diese geschlossen werden.
+    """
+
+    def __init__(self, title: str):
+        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setWindowTitle(title)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.BlankCursor)
+        self.setStyleSheet("background: #000000;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.video = QVideoWidget()
+        self.video.setStyleSheet("background: #000000;")
+        self.video.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self.video)
+        self.target = None
+
+    def show_on(self, screen) -> None:
+        self.target = screen
+        self.show()
+        if self.windowHandle():
+            self.windowHandle().setScreen(screen)
+        self.setGeometry(screen.geometry())
+        self.showFullScreen()
+
+
 class CameraPanel(QWidget):
     """Kamera-Bereich der Seitenleiste mit ATEM-Integration (ein normales Widget, kein eigenes Fenster)."""
 
@@ -178,6 +213,8 @@ class CameraPanel(QWidget):
         super().__init__(parent)
         self._streams = [None] * self.SLOT_COUNT        # je Platz: (QCamera, QMediaCaptureSession)
         self._fullscreen = {}                           # Platz -> FullscreenWindow
+        self._permanent = None                          # PermanentCameraWindow (dauerhafte Ausgabe) oder None
+        self._permanent_link = None                     # (Quelle, Verbindung) für die Bildweitergabe
         self._atem_active = False
         self._tip_slot = None
         self._tip_pos = QCursor.pos()
@@ -203,6 +240,11 @@ class CameraPanel(QWidget):
         self._hover_timer.setInterval(80)
         self._hover_timer.timeout.connect(self._poll_hover)
         self._hover_timer.start()
+
+        # Bildschirm an- oder abgesteckt: dauerhafte Ausgabe passend öffnen bzw. schließen
+        app = QGuiApplication.instance()
+        app.screenRemoved.connect(self._on_screen_removed)
+        app.screenAdded.connect(lambda _screen: QTimer.singleShot(500, self.apply_permanent_output))
 
     _slot_height = None     # feste Höhe je Kamerafeld (von der Seitenleiste gesetzt), sonst 16:9 nach Breite
 
@@ -292,6 +334,7 @@ class CameraPanel(QWidget):
                 slot.set_state("missing")
 
         self._check_atem_trigger()
+        self.apply_permanent_output()
 
     def _stop_cameras(self):
         for stream in self._streams:
@@ -305,6 +348,7 @@ class CameraPanel(QWidget):
         """Bestehende Kameras stoppen, Vollbildansichten schließen und Streams neu laden."""
         for index in list(self._fullscreen):
             self.close_fullscreen(index)
+        self.close_permanent_output()
         self._stop_cameras()
         for stream in self._streams:
             if stream:
@@ -352,9 +396,7 @@ class CameraPanel(QWidget):
             self.close_fullscreen(other)
         self.fullscreen_opening.emit()
 
-        screens = QApplication.screens()
-        screen_index = app_settings().value("beamer_screen", 0, type=int)
-        target = screens[screen_index] if 0 <= screen_index < len(screens) else screens[0]
+        target = beamer_screen()
 
         fs_win = FullscreenWindow()
         fs_win.setWindowTitle(f"Live Kamera {index + 1} – Vollbild")
@@ -392,6 +434,62 @@ class CameraPanel(QWidget):
         fs_win.deleteLater()
 
     # ------------------------------------------------------------------
+    # Dauerhafte Ausgabe
+    # ------------------------------------------------------------------
+    def apply_permanent_output(self) -> None:
+        """Öffnet (oder schließt) die dauerhafte Ausgabe laut Einstellungen.
+
+        Das Bild kommt aus demselben Kamera-Stream wie das Vorschaubild; jedes Einzelbild wird zusätzlich an das
+        Fenster auf dem gewählten Bildschirm weitergereicht (eine Kamera lässt sich nicht zweimal öffnen)."""
+        settings = app_settings()
+        number = settings.value(KEY_PERMANENT_CAMERA, 0, type=int)
+        screen = find_screen(settings.value(KEY_PERMANENT_SCREEN, "", type=str))
+        index = number - 1
+        if not (0 <= index < self.SLOT_COUNT) or self._streams[index] is None or screen is None:
+            self.close_permanent_output()
+            if number and screen is None:
+                log.info("Dauerhafte Kamera-Ausgabe: gewählter Bildschirm ist nicht angeschlossen.")
+            return
+        if self._permanent is not None and self._permanent.target is screen \
+                and self._permanent_link and self._permanent_link[2] == index:
+            return                                          # läuft schon genau so
+        self.close_permanent_output()
+
+        window = PermanentCameraWindow(f"Kamera {number} – dauerhafte Ausgabe")
+        source = self.slots[index].video.videoSink()
+        connection = source.videoFrameChanged.connect(window.video.videoSink().setVideoFrame)
+        self._permanent = window
+        self._permanent_link = (source, connection, index)
+        window.show_on(screen)
+        main = self.window()
+        if main is not None and main.isVisible():
+            QTimer.singleShot(0, main.activateWindow)       # Bedienung bleibt im Hauptfenster
+
+    def close_permanent_output(self) -> None:
+        if self._permanent_link is not None:
+            source, connection, _index = self._permanent_link
+            try:
+                source.videoFrameChanged.disconnect(connection)
+            except (TypeError, RuntimeError):
+                pass
+            self._permanent_link = None
+        if self._permanent is not None:
+            self._permanent.close()
+            self._permanent.deleteLater()
+            self._permanent = None
+
+    def permanent_output(self):
+        """(Kamera-Nummer, Bildschirm) der laufenden dauerhaften Ausgabe oder ``None``."""
+        if self._permanent is None or self._permanent_link is None:
+            return None
+        return self._permanent_link[2] + 1, self._permanent.target
+
+    def _on_screen_removed(self, screen) -> None:
+        # sonst schiebt das System das Vollbild auf einen anderen Bildschirm (womöglich über das Hauptfenster)
+        if self._permanent is not None and self._permanent.target is screen:
+            self.close_permanent_output()
+
+    # ------------------------------------------------------------------
     # Beenden
     # ------------------------------------------------------------------
     def fullscreen_indices(self) -> list:
@@ -408,6 +506,7 @@ class CameraPanel(QWidget):
     def stop_streams(self):
         for index in list(self._fullscreen):
             self.close_fullscreen(index)
+        self.close_permanent_output()
         self._stop_cameras()
         if self._atem_active:
             atem.switch("default")
