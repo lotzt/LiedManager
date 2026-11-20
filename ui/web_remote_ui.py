@@ -294,7 +294,7 @@ class RemoteController(QObject):
             "recording": {"state": w.recorder.state, "seconds": int(self._rec_seconds)},
             "pause": {"running": w.pausentimer.running, "end": panel.end_time().toString("HH:mm"),
                       "lines": panel.lines(), "seconds_left": w.pausentimer.seconds_left(),
-                      "max_lines": panel.max_lines(), "max_chars": panel.max_chars()},
+                      "max_lines": panel.max_lines(), "max_chars": panel.max_chars(), "fit": panel.remote_fit()},
             "images": {"items": [{"name": os.path.basename(p), "key": hashlib.sha1(p.encode("utf-8")).hexdigest()[:10]}
                                  for p in paths]},
             "gallery": ({"index": gallery.current_index, "count": gallery.image_count} if gallery is not None else None),

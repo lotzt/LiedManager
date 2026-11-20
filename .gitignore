@@ -30,3 +30,12 @@ Thumbs.db
 # Pausenfolien sind persönlich/urheberrechtlich – nicht ins Repository
 pausentimer/
 *.pptx
+
+# Echte Zugangsdaten für die Website – nie ins Repository
+server/remote-zugang.php
+server/sync-zugang.php
+remote-zugang.php
+sync-zugang.php
+
+# Finder-Kopien
+* 2.*

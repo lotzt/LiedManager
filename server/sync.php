@@ -3,8 +3,9 @@
  * LiedManager – Sync-Server (All-Inkl: PHP + MySQL)
  *
  * Einrichtung: siehe README.md, Abschnitt „Datenbank auf mehreren Geräten abgleichen“.
- *   1. KAS -> Datenbanken: neue MySQL-Datenbank anlegen, Name/Benutzer/Passwort unten eintragen.
- *   2. Ein langes zufälliges TOKEN erfinden und unten eintragen (dasselbe Token kommt in jedes LiedManager).
+ *   1. KAS -> Datenbanken: neue MySQL-Datenbank anlegen.
+ *   2. TOKEN (langes Zufallspasswort, dasselbe kommt in jedes LiedManager) und die Datenbank-Zugangsdaten in
+ *      sync-zugang.php eintragen (Vorlage: sync-zugang.beispiel.php) und diese Datei neben sync.php legen.
  *   3. Diese Datei per WebFTP in einen Ordner der Domain legen, z. B.  https://deine-domain.de/sync/sync.php
  *
  * Der Server speichert pro Lied eine Zeile. Jedes Lied wird einzeln übertragen, damit große Audios/Bilder
@@ -12,11 +13,16 @@
  * jüngere Änderung (gleiche Zeit: größere Geräte-Kennung) – genau wie im Programm.
  */
 
-const TOKEN   = 'HIER-LANGES-ZUFAELLIGES-TOKEN';
-const DB_HOST = 'localhost';
-const DB_NAME = 'dXXXXXXX';
-const DB_USER = 'dXXXXXXX';
-const DB_PASS = 'HIER-DB-PASSWORT';
+// Zugangsdaten: am besten in der eigenen Datei „sync-zugang.php“ im selben Ordner (Vorlage: sync-zugang.beispiel.php).
+// Dann kann diese Datei bei Updates einfach ersetzt werden, ohne die Daten neu einzutragen.
+if (is_file(__DIR__ . '/sync-zugang.php')) {
+    require __DIR__ . '/sync-zugang.php';
+}
+defined('TOKEN')   || define('TOKEN',   'HIER-LANGES-ZUFAELLIGES-TOKEN');
+defined('DB_HOST') || define('DB_HOST', 'localhost');
+defined('DB_NAME') || define('DB_NAME', 'dXXXXXXX');
+defined('DB_USER') || define('DB_USER', 'dXXXXXXX');
+defined('DB_PASS') || define('DB_PASS', 'HIER-DB-PASSWORT');
 
 const FORMAT     = 1;      // Protokollversion (Programm und Server müssen zusammenpassen)
 const LIST_LIMIT = 2000;   // Einträge pro „list“-Antwort
