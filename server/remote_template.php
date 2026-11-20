@@ -52,6 +52,7 @@ const REC_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg'];
 const REC_MAX_BYTES  = 2147483648; // größte Aufnahme (2 GB)
 const REPORT_KEEP     = 2592000;    // Problemmeldungen werden nach 30 Tagen gelöscht
 const REPORT_MAX      = 200;        // … und es bleiben höchstens so viele
+const SEARCH_MAX     = 60;         // höchstens so viele Treffer (wie im Programm)
 const UPLOAD_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
 
 @ini_set('memory_limit', '256M');
@@ -225,6 +226,11 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_plan($db);                   // Update: Lieder vormerken
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_songs_ver LIMIT 1');
+    } catch (PDOException $e) {
+        create_songs($db);                  // Update: Liedsuche ohne laufendes Programm
+    }
     return $db;
 }
 
@@ -310,6 +316,27 @@ function create_plan(PDO $db): void {
         dev     VARCHAR(40) NOT NULL PRIMARY KEY,
         created INT NOT NULL,
         body    MEDIUMTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+/** Liederliste für die Suche auf der Website, solange das Programm aus ist (je Computer; nur Nummer, Titel, Text). */
+function create_songs(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_songs (
+        dev     VARCHAR(40) NOT NULL,
+        gen     CHAR(40) NOT NULL,
+        pos     INT NOT NULL,
+        k       VARCHAR(60) NOT NULL,
+        nummer  VARCHAR(60) NOT NULL,
+        titel   VARCHAR(300) NOT NULL,
+        alias   VARCHAR(60) NOT NULL,
+        nt      VARCHAR(300) NOT NULL,
+        nl      MEDIUMTEXT NOT NULL,
+        PRIMARY KEY (dev, gen, pos)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_songs_ver (
+        dev     VARCHAR(40) NOT NULL PRIMARY KEY,
+        gen     CHAR(40) NOT NULL,
+        updated INT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
 }
 
@@ -399,11 +426,224 @@ function device_cleanup(PDO $db): void {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            songs_move($db, $old);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
     }
     $db->prepare('DELETE FROM lm_rm_devices WHERE did = "" AND alive < ?')->execute([time() - 300]);
+}
+
+/** Liederliste vom Programm in Stücken annehmen; erst wenn sie vollständig ist, gilt sie (die alte bleibt bis dahin). */
+function songs_put(PDO $db, array $in): void {
+    $gen = (string)($in['hash'] ?? '');
+    $start = (int)($in['start'] ?? -1);
+    $total = (int)($in['total'] ?? -1);
+    $songs = $in['songs'] ?? null;
+    if (!preg_match('/^[0-9a-f]{40}$/', $gen) || $start < 0 || $total < 1 || $total > 100000 || !is_array($songs)
+        || $start + count($songs) > $total) {
+        fail(400, 'Ungültige Liederliste.');
+    }
+    if ($start === 0) {
+        $db->prepare('DELETE FROM lm_rm_songs WHERE dev = ? AND gen = ?')->execute([cur_dev(), $gen]);
+    }
+    $insert = $db->prepare('REPLACE INTO lm_rm_songs (dev, gen, pos, k, nummer, titel, alias, nt, nl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $db->beginTransaction();
+    foreach (array_values($songs) as $i => $row) {
+        if (!is_array($row) || count($row) < 6) {
+            $db->rollBack();
+            fail(400, 'Ungültiges Lied in der Liederliste.');
+        }
+        $insert->execute([cur_dev(), $gen, $start + $i, lm_cut($row[0], 60), lm_cut($row[1], 60), lm_cut($row[2], 300),
+            lm_cut($row[3], 60), lm_cut($row[4], 300), lm_cut($row[5], 4000000)]);
+    }
+    $db->commit();
+    if ($start + count($songs) === $total) {
+        $q = $db->prepare('SELECT COUNT(*) FROM lm_rm_songs WHERE dev = ? AND gen = ?');
+        $q->execute([cur_dev(), $gen]);
+        if ((int)$q->fetchColumn() === $total) {
+            $db->prepare('REPLACE INTO lm_rm_songs_ver (dev, gen, updated) VALUES (?, ?, ?)')->execute([cur_dev(), $gen, time()]);
+            $db->prepare('DELETE FROM lm_rm_songs WHERE dev = ? AND gen <> ?')->execute([cur_dev(), $gen]);
+        }
+    }
+    json_out(['ok' => true]);
+}
+
+function lm_cut($value, int $length): string {
+    $text = is_scalar($value) ? (string)$value : '';
+    return function_exists('mb_substr') ? mb_substr($text, 0, $length, 'UTF-8') : substr($text, 0, $length);
+}
+
+function lm_lower(string $text): string {
+    return function_exists('mb_strtolower') ? mb_strtolower($text, 'UTF-8') : strtolower($text);
+}
+
+/** Wie normalize() im Programm: Kleinschreibung, ohne Satzzeichen, Leerraum zusammengefasst. */
+function lm_norm(string $text): string {
+    $text = (string)preg_replace('/[^\p{L}\p{N}_\s]+/u', '', lm_lower($text));
+    return trim((string)preg_replace('/\s+/u', ' ', $text));
+}
+
+/** Ähnlichkeit 0…1 (0, sobald sie unter 80 % liegt) – wie die unscharfe Suche im Programm. */
+function lm_similar(string $candidate, string $query): float {
+    $sum = strlen($candidate) + strlen($query);
+    if ($sum === 0 || 2 * min(strlen($candidate), strlen($query)) / $sum < 0.8) {
+        return 0.0;
+    }
+    similar_text($candidate, $query, $percent);
+    return $percent >= 80 ? $percent / 100 : 0.0;
+}
+
+/**
+ * Liedsuche ohne laufendes Programm – dieselbe Reihenfolge wie im Programm (database.py, search_songs):
+ * Buchstabe → alle Nummern damit; Nummer (12, p012) → das Lied (Verweise aufgelöst); sonst Titel/Text, sonst unscharf.
+ */
+function offline_search(PDO $db, string $raw): array {
+    $q = $db->prepare('SELECT dev, gen FROM lm_rm_songs_ver ORDER BY dev = ? DESC, updated DESC LIMIT 1');
+    $q->execute([cur_dev()]);
+    $ver = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$ver) {
+        fail(503, 'Das Programm läuft nicht, und auf der Website liegt noch keine Liederliste. Sie wird übertragen, '
+            . 'sobald LiedManager einmal mit der Website verbunden war.');
+    }
+    $reply = function (array $rows): array {
+        $songs = [];
+        foreach (array_slice($rows, 0, SEARCH_MAX) as $row) {
+            $songs[] = ['rowid' => 0, 'nummer' => $row['nummer'], 'titel' => $row['titel']];
+        }
+        return ['songs' => $songs, 'more' => count($rows) > SEARCH_MAX, 'offline' => true];
+    };
+    $query = trim(lm_lower($raw));
+    if ($query === '') {
+        return $reply([]);
+    }
+    $light = $db->prepare('SELECT k, nummer, titel, alias FROM lm_rm_songs WHERE dev = ? AND gen = ? ORDER BY pos');
+
+    if (preg_match('/^[a-z]$/', $query)) {
+        $light->execute([$ver['dev'], $ver['gen']]);
+        $hits = [];
+        foreach ($light->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $key = (string)$row['k'];
+            if ($row['alias'] !== '' || strlen($key) < 2 || $key[0] !== $query || !ctype_digit($key[1])) {
+                continue;
+            }
+            preg_match('/^\d+/', substr($key, 1), $digits);
+            $hits[] = [(int)$digits[0], $key, count($hits), $row];
+        }
+        usort($hits, function ($a, $b) { return [$a[0], $a[1], $a[2]] <=> [$b[0], $b[1], $b[2]]; });
+        return $reply(array_column($hits, 3));
+    }
+
+    if (preg_match('/^([a-z])?(\d{1,3})$/', $query, $m)) {
+        $light->execute([$ver['dev'], $ver['gen']]);
+        $rows = $light->fetchAll(PDO::FETCH_ASSOC);
+        $byKey = [];
+        foreach ($rows as $row) {
+            if (!isset($byKey[$row['k']])) {
+                $byKey[$row['k']] = $row;
+            }
+        }
+        $prefix = $m[1] !== '' ? $m[1] : 'p';
+        $number = (int)$m[2];
+        $song = $byKey[$prefix . sprintf('%03d', $number)] ?? $byKey[$prefix . $number] ?? null;
+        if ($song === null) {
+            foreach ($rows as $row) {
+                if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === $number) {
+                    $song = $row;
+                    break;
+                }
+            }
+        }
+        if ($song !== null) {
+            if ($song['alias'] !== '' && isset($byKey[$song['alias']])) {
+                $song = $byKey[$song['alias']];
+            }
+            return $reply([$song]);
+        }
+    }
+
+    $norm = lm_norm($raw);
+    if ($norm === '') {
+        return $reply([]);
+    }
+    // Titel/Text: die Datenbank sucht grob vor (ohne Groß/Klein), hier wird genau geprüft und sortiert
+    $like = '%' . addcslashes($norm, '%_\\') . '%';
+    $q = $db->prepare("SELECT k, nummer, titel, alias, nt, nl FROM lm_rm_songs WHERE dev = ? AND gen = ? AND alias = ''
+        AND (nt LIKE ? OR REPLACE(nl, CHAR(10 USING utf8mb4), ' ') LIKE ?) ORDER BY pos");
+    $q->execute([$ver['dev'], $ver['gen'], $like, $like]);
+    $padded = ' ' . $norm . ' ';
+    $hits = [];
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $title = (string)$row['nt'];
+        $text = str_replace("\n", ' ', (string)$row['nl']);
+        if (strpos($title, $norm) === false && strpos($text, $norm) === false) {
+            continue;
+        }
+        if ($title === $norm) {
+            $rank = 0;
+        } elseif (strpos($title, $norm) === 0) {
+            $rank = 1;
+        } elseif (strpos(' ' . $title . ' ', $padded) !== false) {
+            $rank = 2;
+        } elseif (strpos($title, $norm) !== false) {
+            $rank = 3;
+        } elseif (in_array($norm, explode("\n", (string)$row['nl']), true)) {
+            $rank = 4;
+        } elseif (strpos(' ' . $text . ' ', $padded) !== false) {
+            $rank = 5;
+        } else {
+            $rank = 6;
+        }
+        $hits[] = [$rank, count($hits), $row];
+    }
+    if ($hits) {
+        usort($hits, function ($a, $b) { return [$a[0], $a[1]] <=> [$b[0], $b[1]]; });
+        return $reply(array_column($hits, 2));
+    }
+
+    // unscharf: Textzeilen (oder Stücke davon) mit mindestens 80 % Übereinstimmung
+    $words = count(explode(' ', $norm));
+    $deadline = microtime(true) + 1.5;
+    $q = $db->prepare("SELECT k, nummer, titel, alias, nl FROM lm_rm_songs WHERE dev = ? AND gen = ? AND alias = '' ORDER BY pos");
+    $q->execute([$ver['dev'], $ver['gen']]);
+    $found = [];
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        if (microtime(true) > $deadline) {
+            break;
+        }
+        $best = 0.0;
+        foreach (explode("\n", (string)$row['nl']) as $line) {
+            $parts = $line === '' ? [] : explode(' ', $line);
+            if (count($parts) <= $words) {
+                $best = max($best, lm_similar($line, $norm));
+            } else {
+                for ($i = 0; $i + $words <= count($parts); $i++) {
+                    $best = max($best, lm_similar(implode(' ', array_slice($parts, $i, $words)), $norm));
+                }
+            }
+            if ($best >= 1.0) {
+                break;
+            }
+        }
+        if ($best > 0) {
+            $found[] = [-$best, count($found), $row];
+        }
+    }
+    usort($found, function ($a, $b) { return [$a[0], $a[1]] <=> [$b[0], $b[1]]; });
+    return $reply(array_column($found, 2));
+}
+
+/** Liederliste eines umbenannten Computers übernehmen (nur wenn der neue Name noch keine hat). */
+function songs_move(PDO $db, string $old): void {
+    $q = $db->prepare('SELECT 1 FROM lm_rm_songs_ver WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    if ($q->fetchColumn()) {
+        $db->prepare('DELETE FROM lm_rm_songs WHERE dev = ?')->execute([$old]);
+        $db->prepare('DELETE FROM lm_rm_songs_ver WHERE dev = ?')->execute([$old]);
+        return;
+    }
+    $db->prepare('UPDATE lm_rm_songs SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+    $db->prepare('UPDATE lm_rm_songs_ver SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
 }
 
 function touch_alive(PDO $db): void {
@@ -721,8 +961,16 @@ function browser_api(string $api): void {
         if (!is_array($args) || !is_array($args['lines'] ?? null)) {
             fail(400, 'Ungültige Ansagen.');
         }
+        // nur die Ansagen – die Endzeit gilt für die laufende Pause und wird nicht vorgemerkt
+        $raw = json_encode(['lines' => array_values(array_map('strval', array_filter($args['lines'], 'is_scalar')))],
+            JSON_UNESCAPED_UNICODE);
         $db->prepare('REPLACE INTO lm_rm_pause (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
         json_out(['ok' => true, 'queued' => true], 202);
+    }
+    if ($api === 'search' && $method === 'POST' && !app_alive($db)) {
+        // Programm läuft nicht: in der zuletzt übertragenen Liederliste suchen (wie die Suche im Programm)
+        $args = json_decode(read_body(MAX_JSON), true);
+        json_out(offline_search($db, substr((string)(is_array($args) ? ($args['text'] ?? '') : ''), 0, 100)));
     }
     if ($api === 'reports' && $method === 'GET') {
         $rows = $db->query('SELECT id, created, version, `system`, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
@@ -846,6 +1094,16 @@ function app_api(): void {
             'body' => base64_encode((string)$row['body'])] : null]);
     }
 
+    if ($action === 'songs_hash') {
+        $q = $db->prepare('SELECT gen FROM lm_rm_songs_ver WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        json_out(['hash' => (string)$q->fetchColumn()]);
+    }
+
+    if ($action === 'songs_put') {
+        songs_put($db, $in);
+    }
+
     if ($action === 'plan_get') {
         $q = $db->prepare('SELECT created, body FROM lm_rm_plan WHERE dev = ?');
         $q->execute([cur_dev()]);
@@ -883,6 +1141,7 @@ function app_api(): void {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            songs_move($db, $old);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }

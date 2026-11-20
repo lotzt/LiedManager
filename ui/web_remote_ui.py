@@ -186,6 +186,10 @@ class RemoteController(QObject):
             raise RemoteError("Unbekannte Aktion.", 404)
         return self._on_gui(lambda: handler(args)) or {"ok": True}
 
+    def song_index(self):
+        """(Prüfsumme, Zeilen) für die Liedsuche auf der Website, solange das Programm aus ist."""
+        return self._on_gui(self.window.db.search_index)
+
     def thumbnail(self, index: int):
         paths = self._image_paths
         if not 0 <= index < len(paths):

@@ -84,8 +84,9 @@ HTML = """<!doctype html>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
-  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Endzeit</b> werden
-    gespeichert und beim nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder und Ansagen</b> werden
+    gespeichert und beim nächsten Start übernommen. Lieder suchen geht auch: antippen merkt sie vor. Alles andere geht
+    erst, wenn das Programm läuft.</p>
 
   <section id="tab-song" class="tabpage">
     <ul id="results" class="list" hidden></ul>
@@ -355,10 +356,10 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
 }
 select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
-/* Programm aus: nur was vorgemerkt werden kann bleibt bedienbar (Ansagen, Endzeit, Bilder hochladen) */
+/* Programm aus: bedienbar bleiben nur Liedsuche, vorgemerkte Lieder und Ansagen */
 .offlinenote { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--rec); border-radius: 12px;
   color: var(--text-2); font-size: var(--fs-small); line-height: 1.4; }
-body.offline #q, body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #results,
+body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #endTime,
 body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images { opacity: .4; pointer-events: none; }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
@@ -672,7 +673,7 @@ JS = r"""(function () {
       if (last.max_lines) { maxLines = last.max_lines; maxChars = last.max_chars || 0; pauseFit = last.fit || null; }
       var src = r.pending || last;
       if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = (src.lines || []).join('\n'); lastFit = $('lines').value; }
-      if (src.end && document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = src.end; }
+      if (last.end) { $('endTime').value = last.end; }          // nur anzeigen: die Endzeit wird nicht vorgemerkt
       $('pauseOffline').textContent = 'Deine Änderungen sind vorgemerkt.';
       $('pauseOffline').hidden = !r.pending;
       layoutLines();
@@ -1009,6 +1010,22 @@ JS = r"""(function () {
     });
   }
 
+  /* Treffer der Suche vormerken, solange das Programm aus ist */
+  function planAdd(nummer) {
+    if (!nummer) { return; }
+    var songs = planSongs();
+    songs.push(nummer);
+    $('planLines').value = songs.join('\n');
+    $('planLines').dataset.dirty = '1';
+    $('planCount').textContent = songs.length;
+    $('planCount').hidden = false;
+    setPlanOpen(true);
+    hideResults();
+    $('q').value = '';
+    sendPlan().then(function () { toast('Nr. ' + nummer + ' vorgemerkt'); })
+      .catch(function (err) { toast(err.message, true); });
+  }
+
   function setPauseOpen(open) {
     pauseOpen = open;
     $('lines').hidden = !open;
@@ -1051,6 +1068,7 @@ JS = r"""(function () {
       if (seq !== searchSeq) { return; }
       list.textContent = '';
       showResults();
+      if (data.offline && data.songs.length) { list.appendChild(el('li', 'muted', 'Programm aus – antippen merkt das Lied vor')); }
       if (!data.songs.length) {
         var none = el('li', 'muted', 'Kein Lied gefunden');
         list.appendChild(none);
@@ -1061,6 +1079,7 @@ JS = r"""(function () {
         var btn = el('button', '', 'Nr. ' + song.nummer + (song.titel ? ' – ' + song.titel : ''));
         btn.type = 'button';
         btn.dataset.rowid = String(song.rowid);
+        btn.dataset.nummer = String(song.nummer);
         item.appendChild(btn);
         list.appendChild(item);
       });
@@ -1099,6 +1118,7 @@ JS = r"""(function () {
   on('results', 'click', function (e) {
     var btn = e.target.closest('button[data-rowid]');
     if (!btn) { return; }
+    if (document.body.classList.contains('offline')) { planAdd(btn.dataset.nummer); return; }
     act('select', { rowid: Number(btn.dataset.rowid) }).then(function () {
       hideResults();
       $('q').value = '';
@@ -1177,7 +1197,9 @@ JS = r"""(function () {
   });
 
   function sendPauseSettings() {
-    return act('pause_set', { lines: $('lines').value.split('\n'), end: $('endTime').value }, true).then(function (r) {
+    var args = { lines: $('lines').value.split('\n') };
+    if (!document.body.classList.contains('offline')) { args.end = $('endTime').value; }   // Endzeit nur bei laufendem Programm
+    return act('pause_set', args, true).then(function (r) {
       if (r && r.shortened) { toast('Zu lang für die Pausenfolie – passend gekürzt', true); }
       if (r && r.queued) { offlinePauseAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
       delete $('lines').dataset.dirty;
