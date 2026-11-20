@@ -110,8 +110,8 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
-  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>Ansagen und Endzeit</b> werden vorgemerkt und beim
-    nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Endzeit</b> werden
+    gespeichert und beim nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
 
   <section id="tab-song" class="tabpage">
     <ul id="results" class="list" hidden></ul>
@@ -151,6 +151,19 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <button id="saveBtn" class="icon" title="Aufnahme speichern" aria-label="Aufnahme speichern" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
       </div>
     </div>
+
+    <section id="planPanel" class="pause">
+      <div class="pauseHead">
+        <button id="planTitle" class="ptitle" type="button" title="Klicken: Liste ein- oder ausklappen">Vorgemerkte Lieder</button>
+        <span id="planCount" class="chip" hidden></span>
+        <button id="planChevron" class="chev" type="button" title="Liste ein- oder ausklappen" aria-label="Vorgemerkte Lieder ein- oder ausklappen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <textarea id="planLines" class="plan" rows="6" spellcheck="false" autocapitalize="off" autocomplete="off" hidden
+                placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
+                title="Liednummern, eine pro Zeile"></textarea>
+      <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
+        erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht.</p>
+    </section>
 
     <section id="pausePanel" class="pause">
       <div class="pauseHead">
@@ -295,6 +308,8 @@ textarea {
   font-size: 11px; line-height: 20px; color: var(--text-2); letter-spacing: 0;
 }
 textarea.toowide, textarea.full { border-color: #E5503A; }
+textarea.plan { height: auto; font-family: inherit; font-size: 16px; line-height: 24px; overflow-y: auto; }
+#planPanel { margin-bottom: 8px; }
 input[type=time] { color-scheme: dark; }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:hover, textarea:hover { border-color: var(--accent-border); }
@@ -643,7 +658,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
       if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); loadOfflinePlan(); }
     });
   }
   /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
@@ -711,6 +726,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     renderImages(s);
     renderCameras(s);
     renderPause(s.pause);
+    if (s.plan) { renderPlan(s.plan); }
     $('syncStatus').textContent = s.sync.enabled ? s.sync.status : 'Aus – im Programm unter Einstellungen → Lieder einrichten.';
     $('syncBtn').disabled = !s.sync.enabled;
     $('versionLabel').textContent = 'LiedManager ' + s.version;
@@ -992,6 +1008,35 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     box.classList.add('full');
     setTimeout(function () { box.classList.remove('full'); }, 400);
   }
+  /* ---------------- Vorgemerkte Lieder ---------------- */
+  var planOpen = false, offlinePlanAt = 0;
+  function setPlanOpen(open) {
+    planOpen = open;
+    $('planLines').hidden = !open;
+    $('planHint').hidden = !open;
+    $('planChevron').classList.toggle('open', open);
+  }
+  function planSongs() {
+    return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+  }
+  function renderPlan(p) {
+    var songs = (p && p.songs) || [];
+    if (document.activeElement !== $('planLines') && !$('planLines').dataset.dirty) { $('planLines').value = songs.join('\n'); }
+    $('planCount').textContent = songs.length;
+    $('planCount').hidden = songs.length === 0;
+  }
+  function loadOfflinePlan() {
+    if (Date.now() - offlinePlanAt < 5000) { return; }
+    offlinePlanAt = Date.now();
+    request('GET', '/api/plan').then(function (r) { renderPlan(r.pending || r.last || { songs: [] }); }).catch(function () {});
+  }
+  function sendPlan() {
+    return act('plan_set', { songs: planSongs() }, true).then(function (r) {
+      if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
+      delete $('planLines').dataset.dirty;
+    });
+  }
+
   function setPauseOpen(open) {
     pauseOpen = open;
     $('lines').hidden = !open;
@@ -1172,6 +1217,10 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   on('lines', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('endTime', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('pauseTitle', 'click', function () { setPauseOpen(!pauseOpen); });
+  on('planTitle', 'click', function () { setPlanOpen(!planOpen); });
+  on('planChevron', 'click', function () { setPlanOpen(!planOpen); });
+  on('planLines', 'input', function () { $('planLines').dataset.dirty = '1'; });
+  on('planLines', 'change', function () { sendPlan().catch(function (err) { toast(err.message, true); }); });
   on('pauseChevron', 'click', function () { setPauseOpen(!pauseOpen); });
   on('pauseBtn', 'click', function () {
     sendPauseSettings().then(function () { return act('pause_toggle'); }).catch(function (err) { toast(err.message, true); });
@@ -1357,6 +1406,11 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_pause($db);                  // Update: Ansagen vormerken
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_plan LIMIT 1');
+    } catch (PDOException $e) {
+        create_plan($db);                   // Update: Lieder vormerken
+    }
     return $db;
 }
 
@@ -1434,6 +1488,21 @@ function create_pause(PDO $db): void {
         created INT NOT NULL,
         body    MEDIUMTEXT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+/** Vorgemerkte Lieder (Liednummern), bearbeitet während das Programm nicht lief (je Computer die letzte Fassung). */
+function create_plan(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_plan (
+        dev     VARCHAR(40) NOT NULL PRIMARY KEY,
+        created INT NOT NULL,
+        body    MEDIUMTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+function plan_pending(PDO $db): bool {
+    $q = $db->prepare('SELECT 1 FROM lm_rm_plan WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    return (bool)$q->fetchColumn();
 }
 
 function pause_pending(PDO $db): bool {
@@ -1514,6 +1583,7 @@ function device_cleanup(PDO $db): void {
         foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $old) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -1808,6 +1878,27 @@ function browser_api(string $api): void {
         $last = is_array($state) && is_array($state['pause'] ?? null) ? $state['pause'] : null;
         json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
     }
+    if ($api === 'plan' && $method === 'GET') {
+        // Vorgemerkte Lieder ohne laufendes Programm: vorgemerkte Fassung, sonst die zuletzt gemeldete
+        $q = $db->prepare('SELECT body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $pending = $q->fetchColumn();
+        $q = $db->prepare('SELECT state FROM lm_rm_devices WHERE name = ?');
+        $q->execute([cur_dev()]);
+        $state = json_decode((string)$q->fetchColumn(), true);
+        $last = is_array($state) && is_array($state['plan'] ?? null) ? $state['plan'] : null;
+        json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
+    }
+    if ($api === 'plan_set' && $method === 'POST' && !app_alive($db)) {
+        // Programm läuft nicht: Liste vormerken, beim nächsten Start übernimmt das Programm sie
+        $raw = read_body(MAX_JSON);
+        $args = json_decode($raw, true);
+        if (!is_array($args) || !is_array($args['songs'] ?? null)) {
+            fail(400, 'Ungültige Liederliste.');
+        }
+        $db->prepare('REPLACE INTO lm_rm_plan (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
+        json_out(['ok' => true, 'queued' => true], 202);
+    }
     if ($api === 'pause_set' && $method === 'POST' && !app_alive($db)) {
         // Programm läuft nicht: Ansagen vormerken, beim nächsten Start übernimmt das Programm sie
         $raw = read_body(MAX_JSON);
@@ -1875,6 +1966,7 @@ function app_api(): void {
         $lastTouch = time();
         $pending = inbox_pending($db);               // vorgemerkte Bilder: Programm soll sie gleich abholen
         $pausePending = pause_pending($db);          // vorgemerkte Ansagen: ebenso
+        $planPending = plan_pending($db);            // vorgemerkte Lieder: ebenso
         while (true) {
             $select->execute([cur_dev()]);
             $jobs = [];
@@ -1885,8 +1977,9 @@ function app_api(): void {
                         'body' => $job['body'] === null ? '' : (string)$job['body']];
                 }
             }
-            if ($jobs || $pending > 0 || $pausePending || microtime(true) >= $deadline) {
-                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending]);
+            if ($jobs || $pending > 0 || $pausePending || $planPending || microtime(true) >= $deadline) {
+                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending,
+                    'plan' => $planPending]);
             }
             if (time() - $lastTouch >= 5) {
                 touch_alive($db);
@@ -1938,6 +2031,18 @@ function app_api(): void {
             'body' => base64_encode((string)$row['body'])] : null]);
     }
 
+    if ($action === 'plan_get') {
+        $q = $db->prepare('SELECT created, body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        json_out(['item' => $row ? ['created' => (int)$row['created'], 'body' => (string)$row['body']] : null]);
+    }
+
+    if ($action === 'plan_done') {
+        $db->prepare('DELETE FROM lm_rm_plan WHERE dev = ? AND created = ?')->execute([cur_dev(), (int)($in['created'] ?? 0)]);
+        json_out(['ok' => true]);
+    }
+
     if ($action === 'pause_get') {
         $q = $db->prepare('SELECT created, body FROM lm_rm_pause WHERE dev = ?');
         $q->execute([cur_dev()]);
@@ -1962,6 +2067,7 @@ function app_api(): void {
         if ($old !== '' && $old !== cur_dev()) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }

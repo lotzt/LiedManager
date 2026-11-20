@@ -84,8 +84,8 @@ HTML = """<!doctype html>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
-  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>Ansagen und Endzeit</b> werden vorgemerkt und beim
-    nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Endzeit</b> werden
+    gespeichert und beim nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
 
   <section id="tab-song" class="tabpage">
     <ul id="results" class="list" hidden></ul>
@@ -125,6 +125,19 @@ HTML = """<!doctype html>
         <button id="saveBtn" class="icon" title="Aufnahme speichern" aria-label="Aufnahme speichern" disabled>__ICON_CHECK__</button>
       </div>
     </div>
+
+    <section id="planPanel" class="pause">
+      <div class="pauseHead">
+        <button id="planTitle" class="ptitle" type="button" title="Klicken: Liste ein- oder ausklappen">Vorgemerkte Lieder</button>
+        <span id="planCount" class="chip" hidden></span>
+        <button id="planChevron" class="chev" type="button" title="Liste ein- oder ausklappen" aria-label="Vorgemerkte Lieder ein- oder ausklappen">__ICON_DOWN__</button>
+      </div>
+      <textarea id="planLines" class="plan" rows="6" spellcheck="false" autocapitalize="off" autocomplete="off" hidden
+                placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
+                title="Liednummern, eine pro Zeile"></textarea>
+      <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
+        erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht.</p>
+    </section>
 
     <section id="pausePanel" class="pause">
       <div class="pauseHead">
@@ -268,6 +281,8 @@ textarea {
   font-size: 11px; line-height: 20px; color: var(--text-2); letter-spacing: 0;
 }
 textarea.toowide, textarea.full { border-color: #E5503A; }
+textarea.plan { height: auto; font-family: inherit; font-size: 16px; line-height: 24px; overflow-y: auto; }
+#planPanel { margin-bottom: 8px; }
 input[type=time] { color-scheme: dark; }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:hover, textarea:hover { border-color: var(--accent-border); }
@@ -615,7 +630,7 @@ JS = r"""(function () {
       if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); loadOfflinePlan(); }
     });
   }
   /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
@@ -683,6 +698,7 @@ JS = r"""(function () {
     renderImages(s);
     renderCameras(s);
     renderPause(s.pause);
+    if (s.plan) { renderPlan(s.plan); }
     $('syncStatus').textContent = s.sync.enabled ? s.sync.status : 'Aus – im Programm unter Einstellungen → Lieder einrichten.';
     $('syncBtn').disabled = !s.sync.enabled;
     $('versionLabel').textContent = 'LiedManager ' + s.version;
@@ -964,6 +980,35 @@ JS = r"""(function () {
     box.classList.add('full');
     setTimeout(function () { box.classList.remove('full'); }, 400);
   }
+  /* ---------------- Vorgemerkte Lieder ---------------- */
+  var planOpen = false, offlinePlanAt = 0;
+  function setPlanOpen(open) {
+    planOpen = open;
+    $('planLines').hidden = !open;
+    $('planHint').hidden = !open;
+    $('planChevron').classList.toggle('open', open);
+  }
+  function planSongs() {
+    return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+  }
+  function renderPlan(p) {
+    var songs = (p && p.songs) || [];
+    if (document.activeElement !== $('planLines') && !$('planLines').dataset.dirty) { $('planLines').value = songs.join('\n'); }
+    $('planCount').textContent = songs.length;
+    $('planCount').hidden = songs.length === 0;
+  }
+  function loadOfflinePlan() {
+    if (Date.now() - offlinePlanAt < 5000) { return; }
+    offlinePlanAt = Date.now();
+    request('GET', '/api/plan').then(function (r) { renderPlan(r.pending || r.last || { songs: [] }); }).catch(function () {});
+  }
+  function sendPlan() {
+    return act('plan_set', { songs: planSongs() }, true).then(function (r) {
+      if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
+      delete $('planLines').dataset.dirty;
+    });
+  }
+
   function setPauseOpen(open) {
     pauseOpen = open;
     $('lines').hidden = !open;
@@ -1144,6 +1189,10 @@ JS = r"""(function () {
   on('lines', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('endTime', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('pauseTitle', 'click', function () { setPauseOpen(!pauseOpen); });
+  on('planTitle', 'click', function () { setPlanOpen(!planOpen); });
+  on('planChevron', 'click', function () { setPlanOpen(!planOpen); });
+  on('planLines', 'input', function () { $('planLines').dataset.dirty = '1'; });
+  on('planLines', 'change', function () { sendPlan().catch(function (err) { toast(err.message, true); }); });
   on('pauseChevron', 'click', function () { setPauseOpen(!pauseOpen); });
   on('pauseBtn', 'click', function () {
     sendPauseSettings().then(function () { return act('pause_toggle'); }).catch(function (err) { toast(err.message, true); });

@@ -154,6 +154,7 @@ class RelayClient:
         self._connected = False
         self._inbox_busy = False
         self._pause_busy = False
+        self._plan_busy = False
         self._lock = threading.Lock()
 
     @property
@@ -244,6 +245,9 @@ class RelayClient:
                 if reply.get("pause") and not self._pause_busy and self._pool is not None:
                     self._pause_busy = True
                     self._pool.submit(self._take_pause)
+                if reply.get("plan") and not self._plan_busy and self._pool is not None:
+                    self._plan_busy = True
+                    self._pool.submit(self._take_plan)
                 for job in reply.get("jobs") or []:
                     pool = self._pool
                     if pool is not None and isinstance(job, dict):
@@ -311,6 +315,27 @@ class RelayClient:
             log.exception("Website-Steuerung: Ansagen-Abholung fehlgeschlagen")
         finally:
             self._pause_busy = False
+
+    def _take_plan(self) -> None:
+        """Vorgemerkte Lieder (auf der Website eingetragen, während das Programm nicht lief) übernehmen."""
+        try:
+            api = RemoteApi(self.url, self.token, INBOX_TIMEOUT, self.device)
+            item = api.call("plan_get").get("item")
+            if not isinstance(item, dict):
+                return
+            try:
+                args = json.loads(item.get("body") or "{}")
+                if isinstance(args, dict):
+                    self.backend.action("plan_set", args)
+            except Exception:
+                log.exception("Website-Steuerung: vorgemerkte Lieder konnten nicht übernommen werden")
+            api.call("plan_done", created=item.get("created"))    # auch bei Fehlern: nicht endlos wiederholen
+        except SyncError as exc:
+            log.debug("Website-Steuerung: Lieder-Abholung gestoppt (%s)", exc)
+        except Exception:
+            log.exception("Website-Steuerung: Lieder-Abholung fehlgeschlagen")
+        finally:
+            self._plan_busy = False
 
     # ------------------------------------------------------------------
     # Zustand senden

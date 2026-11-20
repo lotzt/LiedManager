@@ -18,7 +18,7 @@ from PyQt6.QtCore import QBuffer, QIODevice, QObject, QSize, Qt, QTime, pyqtSign
 from PyQt6.QtGui import QImageReader
 
 from paths import user_data_dir
-from services import atem, xair
+from services import atem, songplan, xair
 from services.recorder import IDLE
 from services.remote_common import RemoteError
 from services.remote_relay import (  # noqa: F401  (auch für den Einstellungsdialog)
@@ -295,6 +295,7 @@ class RemoteController(QObject):
             "pause": {"running": w.pausentimer.running, "end": panel.end_time().toString("HH:mm"),
                       "lines": panel.lines(), "seconds_left": w.pausentimer.seconds_left(),
                       "max_lines": panel.max_lines(), "max_chars": panel.max_chars(), "fit": panel.remote_fit()},
+            "plan": {"songs": songplan.get()},
             "images": {"items": [{"name": os.path.basename(p), "key": hashlib.sha1(p.encode("utf-8")).hexdigest()[:10]}
                                  for p in paths]},
             "gallery": ({"index": gallery.current_index, "count": gallery.image_count} if gallery is not None else None),
@@ -453,6 +454,17 @@ class RemoteController(QObject):
         if not self.window.gong.play():
             raise RemoteError("Die Gong-Datei fehlt.", 409)
         return {"ok": True}
+
+    def _act_plan_set(self, args: dict) -> dict:
+        """Vorgemerkte Lieder (Liednummern, eine pro Zeile) – kommen nach und nach in die Suchzeile."""
+        songs = args.get("songs")
+        if not isinstance(songs, list):
+            raise RemoteError("Ungültige Liederliste.", 400)
+        songplan.set_songs(songs)
+        w = self.window
+        if not w._beamer_showing():
+            w.prefill_planned_song()
+        return {"ok": True, "songs": songplan.get()}
 
     def _act_pause_set(self, args: dict) -> dict:
         panel = self.window.pausentimer_panel

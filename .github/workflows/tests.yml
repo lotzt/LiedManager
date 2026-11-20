@@ -81,4 +81,4 @@ jobs:
           LM_TEST_MYSQL_DB: liedmanager
           LM_TEST_MYSQL_USER: lm
           LM_TEST_MYSQL_PASS: lm-test-pw
-        run: python -m pytest -v tests/test_server_php.py
+        run: python -m pytest -v -rA -s tests/test_server_php.py

@@ -47,8 +47,9 @@ def server(tmp_path_factory):
         f"define('DB_USER', '{os.environ['LM_TEST_MYSQL_USER']}');\n"
         f"define('DB_PASS', '{os.environ['LM_TEST_MYSQL_PASS']}');\n", encoding="utf-8")
     port = _free_port()
-    proc = subprocess.Popen(["php", "-S", f"127.0.0.1:{port}", "-t", str(root)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log_file = open(root / "php.log", "w")          # PHP-Fehlerprotokoll: erscheint bei fehlgeschlagenen Tests
+    proc = subprocess.Popen(["php", "-d", "log_errors=1", "-d", "error_log=" + str(root / "php-errors.log"),
+                             "-S", f"127.0.0.1:{port}", "-t", str(root)], stdout=log_file, stderr=subprocess.STDOUT)
     base = f"http://127.0.0.1:{port}"
     for _ in range(50):
         try:
@@ -59,6 +60,11 @@ def server(tmp_path_factory):
     yield base
     proc.terminate()
     proc.wait(timeout=10)
+    log_file.close()
+    for name in ("php-errors.log", "php.log"):
+        path = root / name
+        if path.exists() and path.read_text(errors="replace").strip():
+            print(f"===== {name} =====\n" + path.read_text(errors="replace")[-6000:])
 
 
 def http(url, data=None, headers=None, method=None):
@@ -109,13 +115,22 @@ def test_anmeldung_und_ansagen_vormerken(server):
     status, text = http(f"{url}?api=pause", headers=head)
     assert status == 200 and json.loads(text)["pending"]["lines"] == ["Erste Ansage", "Zweite"], text
 
-    # Programm startet: holt die vorgemerkten Ansagen ab und meldet sie als erledigt
+    status, text = http(f"{url}?api=plan_set", {"songs": ["p012", "s5"]}, head)
+    assert status == 202 and json.loads(text)["queued"], text
+    status, text = http(f"{url}?api=plan", headers=head)
+    assert status == 200 and json.loads(text)["pending"]["songs"] == ["p012", "s5"], text
+
+    # Programm startet: holt vorgemerkte Ansagen und Lieder ab und meldet sie als erledigt
     reply = app(server, "poll", hold=0)
-    assert reply["pause"], reply
+    assert reply["pause"] and reply["plan"], reply
+    plan = app(server, "plan_get")["item"]
+    assert json.loads(plan["body"])["songs"] == ["p012", "s5"]
+    app(server, "plan_done", created=plan["created"])
     item = app(server, "pause_get")["item"]
     assert json.loads(item["body"])["end"] == "11:45"
     app(server, "pause_done", created=item["created"])
-    assert not app(server, "poll", hold=0)["pause"], "nach dem Abholen ist nichts mehr vorgemerkt"
+    reply = app(server, "poll", hold=0)
+    assert not reply["pause"] and not reply["plan"], "nach dem Abholen ist nichts mehr vorgemerkt"
 
     # Zustand vom Programm kommt im Browser an
     app(server, "state", data=json.dumps({"version": "test", "pause": {"lines": ["Erste Ansage"]}}))

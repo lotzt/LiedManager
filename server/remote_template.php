@@ -220,6 +220,11 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_pause($db);                  // Update: Ansagen vormerken
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_plan LIMIT 1');
+    } catch (PDOException $e) {
+        create_plan($db);                   // Update: Lieder vormerken
+    }
     return $db;
 }
 
@@ -297,6 +302,21 @@ function create_pause(PDO $db): void {
         created INT NOT NULL,
         body    MEDIUMTEXT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+/** Vorgemerkte Lieder (Liednummern), bearbeitet während das Programm nicht lief (je Computer die letzte Fassung). */
+function create_plan(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_plan (
+        dev     VARCHAR(40) NOT NULL PRIMARY KEY,
+        created INT NOT NULL,
+        body    MEDIUMTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+function plan_pending(PDO $db): bool {
+    $q = $db->prepare('SELECT 1 FROM lm_rm_plan WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    return (bool)$q->fetchColumn();
 }
 
 function pause_pending(PDO $db): bool {
@@ -377,6 +397,7 @@ function device_cleanup(PDO $db): void {
         foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $old) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -671,6 +692,27 @@ function browser_api(string $api): void {
         $last = is_array($state) && is_array($state['pause'] ?? null) ? $state['pause'] : null;
         json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
     }
+    if ($api === 'plan' && $method === 'GET') {
+        // Vorgemerkte Lieder ohne laufendes Programm: vorgemerkte Fassung, sonst die zuletzt gemeldete
+        $q = $db->prepare('SELECT body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $pending = $q->fetchColumn();
+        $q = $db->prepare('SELECT state FROM lm_rm_devices WHERE name = ?');
+        $q->execute([cur_dev()]);
+        $state = json_decode((string)$q->fetchColumn(), true);
+        $last = is_array($state) && is_array($state['plan'] ?? null) ? $state['plan'] : null;
+        json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
+    }
+    if ($api === 'plan_set' && $method === 'POST' && !app_alive($db)) {
+        // Programm läuft nicht: Liste vormerken, beim nächsten Start übernimmt das Programm sie
+        $raw = read_body(MAX_JSON);
+        $args = json_decode($raw, true);
+        if (!is_array($args) || !is_array($args['songs'] ?? null)) {
+            fail(400, 'Ungültige Liederliste.');
+        }
+        $db->prepare('REPLACE INTO lm_rm_plan (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
+        json_out(['ok' => true, 'queued' => true], 202);
+    }
     if ($api === 'pause_set' && $method === 'POST' && !app_alive($db)) {
         // Programm läuft nicht: Ansagen vormerken, beim nächsten Start übernimmt das Programm sie
         $raw = read_body(MAX_JSON);
@@ -738,6 +780,7 @@ function app_api(): void {
         $lastTouch = time();
         $pending = inbox_pending($db);               // vorgemerkte Bilder: Programm soll sie gleich abholen
         $pausePending = pause_pending($db);          // vorgemerkte Ansagen: ebenso
+        $planPending = plan_pending($db);            // vorgemerkte Lieder: ebenso
         while (true) {
             $select->execute([cur_dev()]);
             $jobs = [];
@@ -748,8 +791,9 @@ function app_api(): void {
                         'body' => $job['body'] === null ? '' : (string)$job['body']];
                 }
             }
-            if ($jobs || $pending > 0 || $pausePending || microtime(true) >= $deadline) {
-                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending]);
+            if ($jobs || $pending > 0 || $pausePending || $planPending || microtime(true) >= $deadline) {
+                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending,
+                    'plan' => $planPending]);
             }
             if (time() - $lastTouch >= 5) {
                 touch_alive($db);
@@ -801,6 +845,18 @@ function app_api(): void {
             'body' => base64_encode((string)$row['body'])] : null]);
     }
 
+    if ($action === 'plan_get') {
+        $q = $db->prepare('SELECT created, body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        json_out(['item' => $row ? ['created' => (int)$row['created'], 'body' => (string)$row['body']] : null]);
+    }
+
+    if ($action === 'plan_done') {
+        $db->prepare('DELETE FROM lm_rm_plan WHERE dev = ? AND created = ?')->execute([cur_dev(), (int)($in['created'] ?? 0)]);
+        json_out(['ok' => true]);
+    }
+
     if ($action === 'pause_get') {
         $q = $db->prepare('SELECT created, body FROM lm_rm_pause WHERE dev = ?');
         $q->execute([cur_dev()]);
@@ -825,6 +881,7 @@ function app_api(): void {
         if ($old !== '' && $old !== cur_dev()) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
