@@ -4,6 +4,8 @@ Die Liedtexte werden einmal in den Speicher geladen (nur Nummer, Titel, Text –
 und bei jeder Suche wiederverwendet. Ändert ein anderes Programm die Datenbank, wird der Cache
 automatisch neu aufgebaut. Die Medien (Audio/Bilder) werden erst beim Auswählen eines Liedes geladen.
 """
+import hashlib
+import json
 import logging
 import os
 import time
@@ -161,6 +163,26 @@ class DatabaseManager:
         if not self._ensure_cache():
             return []
         return [song.summary for song in self._songs]
+
+    def search_index(self):
+        """Kurzfassung aller Lieder für die Liedsuche auf der Website, wenn das Programm aus ist:
+        ``(Prüfsumme, [[Nummer-Schlüssel, Nummer, Titel, Verweis, Titel normalisiert, Textzeilen normalisiert], …])``
+        in Datenbank-Reihenfolge – keine Bilder/Audios. Wird nur neu berechnet, wenn sich die Lieder geändert haben."""
+        if not self._ensure_cache():
+            return "", []
+        cached = getattr(self, "_index_cache", None)
+        if cached is not None and cached[0] is self._songs:
+            return cached[1], cached[2]
+        rows = []
+        for song in self._songs:
+            summary = song.summary
+            titel = str(summary.titel) if summary.titel and summary.titel != "None" else ""
+            alias = str(summary.alias).lower().replace(" ", "") if song.has_alias else ""
+            rows.append([song.number_key[:60], str(summary.nummer)[:60], titel[:300], alias[:60],
+                         song.norm_title[:300], "\n".join(" ".join(words) for words in song.lines)])
+        digest = hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()
+        self._index_cache = (self._songs, digest, rows)
+        return digest, rows
 
     def search_songs(self, raw_query: str):
         """Nummer ('1', 'p1', 'p001') -> Titel/Text -> unscharfe Passagensuche. Liefert ``SongSummary``-Liste."""

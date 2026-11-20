@@ -107,8 +107,8 @@ def test_anmeldung_und_ansagen_vormerken(server):
 
     status, _ = http(f"{url}?api=state", headers=head)
     assert status == 503, "Programm läuft nicht: kein Zustand"
-    status, _ = http(f"{url}?api=upload&name=bild.png", b"\x89PNG", {**head, "Content-Type": "image/png"})
-    assert status == 503, "Bilder werden bei ausgeschaltetem Programm nicht angenommen"
+    status, text = http(f"{url}?api=upload&name=bild.png", b"\x89PNG", {**head, "Content-Type": "image/png"})
+    assert status == 202 and json.loads(text)["queued"], "Bilder werden bei ausgeschaltetem Programm vorgemerkt"
 
     status, text = http(f"{url}?api=pause_set", {"lines": ["Erste Ansage", "Zweite"], "end": "11:45"}, head)
     assert status == 202 and json.loads(text)["queued"], text
@@ -122,15 +122,18 @@ def test_anmeldung_und_ansagen_vormerken(server):
 
     # Programm startet: holt vorgemerkte Ansagen und Lieder ab und meldet sie als erledigt
     reply = app(server, "poll", hold=0)
-    assert reply["pause"] and reply["plan"], reply
+    assert reply["pause"] and reply["plan"] and reply["inbox"] == 1, reply
+    bild = app(server, "inbox_get")["item"]
+    assert bild["name"] == "bild.png"
+    app(server, "inbox_done", id=bild["id"])
     plan = app(server, "plan_get")["item"]
     assert json.loads(plan["body"])["songs"] == ["p012", "s5"]
     app(server, "plan_done", created=plan["created"])
     item = app(server, "pause_get")["item"]
-    assert json.loads(item["body"])["end"] == "11:45"
+    assert json.loads(item["body"]) == {"lines": ["Erste Ansage", "Zweite"]}, "Endzeit wird nicht vorgemerkt"
     app(server, "pause_done", created=item["created"])
     reply = app(server, "poll", hold=0)
-    assert not reply["pause"] and not reply["plan"], "nach dem Abholen ist nichts mehr vorgemerkt"
+    assert not reply["pause"] and not reply["plan"] and not reply["inbox"], "nach dem Abholen ist nichts mehr vorgemerkt"
 
     # Zustand vom Programm kommt im Browser an
     app(server, "state", data=json.dumps({"version": "test", "pause": {"lines": ["Erste Ansage"]}}))
@@ -149,3 +152,35 @@ def test_abgleich(server):
     status, text = http(f"{server}/sync/sync.php", {"token": TOKEN, "action": "list", "since": 0})
     assert status == 200, text
     assert isinstance(json.loads(text).get("items"), list), text
+
+
+def test_liedsuche_ohne_programm(server):
+    """Das Programm lädt seine Liederliste hoch; ist es aus, sucht die Website darin wie das Programm selbst."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from database import DatabaseManager
+    db = DatabaseManager(str(ROOT / "beispiel" / "LiedManager-Beispiel.db"))
+    digest, rows = db.search_index()
+    assert rows, "Beispiel-Datenbank ohne Lieder"
+    half = len(rows) // 2 or 1
+    app(server, "songs_put", hash=digest, start=0, total=len(rows), songs=rows[:half])
+    if half < len(rows):
+        app(server, "songs_put", hash=digest, start=half, total=len(rows), songs=rows[half:])
+    assert app(server, "songs_hash")["hash"] == digest
+    app(server, "bye")                                  # Programm aus
+
+    url = f"{server}/steuerung/remote.php"
+    status, text = http(f"{url}?api=login", {"pin": PIN})
+    head = {"X-LM-Token": json.loads(text)["token"], "X-LM-Device": DEVICE}
+
+    def search(text_):
+        status_, body = http(f"{url}?api=search", {"text": text_}, head)
+        assert status_ == 200, body
+        data = json.loads(body)
+        assert data["offline"], data
+        return data["songs"]
+
+    for query in ("Großer Gott", "100", "1", "herr wir preisen", "lobe den heren den mächtigen", "", "zzzzqqq"):
+        expected = [(s.nummer, s.titel) for s in db.search_songs(query)]
+        got = [(s["nummer"], s["titel"]) for s in search(query)]
+        assert [str(n) for n, _ in got] == [str(n) for n, _ in expected], (query, got, expected)

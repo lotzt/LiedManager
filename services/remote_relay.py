@@ -38,6 +38,8 @@ RETRY_MAX = 30                  # Wartezeit bei Fehlern wächst bis zu diesem We
 WORKERS = 4
 INBOX_TIMEOUT = 60              # vorgemerkte Bilder können einige MB groß sein
 INBOX_BATCH = 40                # höchstens so viele Bilder je Abholung
+SONGS_EVERY = 60                # so oft wird geprüft, ob die Liederliste für die Suche auf der Website neu muss (s)
+SONGS_BATCH_BYTES = 1_000_000   # Liederliste in Stücken dieser Größe hochladen
 
 
 KEY_DEVICE_NAME = "web_device_name"
@@ -155,6 +157,7 @@ class RelayClient:
         self._inbox_busy = False
         self._pause_busy = False
         self._plan_busy = False
+        self._songs_sent = ""         # Prüfsumme der Liederliste, die die Website schon hat
         self._lock = threading.Lock()
 
     @property
@@ -179,6 +182,8 @@ class RelayClient:
             threading.Thread(target=self._poll_loop, name="relay-poll", daemon=True),
             threading.Thread(target=self._state_loop, name="relay-state", daemon=True),
         ]
+        if callable(getattr(self.backend, "song_index", None)):
+            self._threads.append(threading.Thread(target=self._songs_loop, name="relay-songs", daemon=True))
         for thread in self._threads:
             thread.start()
         self._set_status("Verbinde mit der Website …")
@@ -336,6 +341,45 @@ class RelayClient:
             log.exception("Website-Steuerung: Lieder-Abholung fehlgeschlagen")
         finally:
             self._plan_busy = False
+
+    # ------------------------------------------------------------------
+    # Liederliste für die Suche auf der Website (wenn das Programm aus ist)
+    # ------------------------------------------------------------------
+    def _songs_loop(self) -> None:
+        if self._stop.wait(5):                            # erst verbinden lassen
+            return
+        while not self._stop.is_set():
+            if self._connected:
+                try:
+                    self._send_songs()
+                except SyncError as exc:
+                    log.debug("Website-Steuerung: Liederliste nicht gesendet (%s)", exc)
+                except RemoteError:
+                    pass                                  # Programm gerade beschäftigt: beim nächsten Mal
+                except Exception:
+                    log.exception("Website-Steuerung: Liederliste konnte nicht gesendet werden")
+            if self._stop.wait(SONGS_EVERY):
+                return
+
+    def _send_songs(self) -> None:
+        digest, rows = self.backend.song_index()
+        if not digest or digest == self._songs_sent:
+            return
+        api = RemoteApi(self.url, self.token, INBOX_TIMEOUT, self.device)
+        if api.call("songs_hash").get("hash") != digest:
+            start, total = 0, len(rows)
+            while start < total:
+                batch, size = [], 0
+                while start + len(batch) < total and (not batch or size < SONGS_BATCH_BYTES):
+                    row = rows[start + len(batch)]
+                    size += sum(len(str(value)) for value in row) + 20
+                    batch.append(row)
+                if self._stop.is_set():
+                    return
+                api.call("songs_put", hash=digest, start=start, total=total, songs=batch)
+                start += len(batch)
+            log.info("Website-Steuerung: Liederliste für die Suche übertragen (%d Lieder).", total)
+        self._songs_sent = digest
 
     # ------------------------------------------------------------------
     # Zustand senden
