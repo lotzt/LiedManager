@@ -46,6 +46,8 @@ const MAX_UPLOAD     = 8388608;    // größtes Bild vom Handy (8 MB; als Text g
 const MAX_APP_BODY   = 4194304;    // größte Meldung vom Programm
 const MAX_FAILURES   = 5;          // falsche PINs je Adresse, dann Sperre (30 s, verdoppelt sich bis 10 min)
 const GLOBAL_FAILURES = 50;        // falsche PINs von allen Adressen in 10 Minuten, dann 5 Minuten Pause für alle
+const INBOX_MAX_FILES = 40;        // so viele Bilder werden für das Programm vorgemerkt, solange es nicht läuft
+const INBOX_MAX_BYTES = 50331648;  // … höchstens 48 MB zusammen
 const INBOX_KEEP     = 2592000;    // vorgemerkte Bilder werden nach 30 Tagen verworfen
 const REC_DIR        = 'aufnahmen'; // Ordner neben remote.php für die Aufnahmen aus dem Programm
 const REC_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg'];
@@ -111,7 +113,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
-  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder und Ansagen</b> werden
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Bilder</b> werden
     gespeichert und beim nächsten Start übernommen. Lieder suchen geht auch: antippen merkt sie vor. Alles andere geht
     erst, wenn das Programm läuft.</p>
 
@@ -384,11 +386,12 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
 }
 select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
-/* Programm aus: bedienbar bleiben nur Liedsuche, vorgemerkte Lieder und Ansagen */
+/* Programm aus: bedienbar bleiben nur Liedsuche, vorgemerkte Lieder, Ansagen und Bilder hochladen */
 .offlinenote { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--rec); border-radius: 12px;
   color: var(--text-2); font-size: var(--fs-small); line-height: 1.4; }
 body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #endTime,
-body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images { opacity: .4; pointer-events: none; }
+body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images .card:first-child,
+body.offline #thumbs, body.offline #clearBtn { opacity: .4; pointer-events: none; }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
 /* Lied */
@@ -1642,6 +1645,19 @@ function device_cleanup(PDO $db): void {
     $db->prepare('DELETE FROM lm_rm_devices WHERE did = "" AND alive < ?')->execute([time() - 300]);
 }
 
+/** Bild vormerken, solange das Programm nicht läuft; es wird beim nächsten Verbinden abgeholt. */
+function queue_upload(PDO $db, string $name, string $data): void {
+    $db->prepare('DELETE FROM lm_rm_inbox WHERE created < ?')->execute([time() - INBOX_KEEP]);
+    $row = $db->query('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS bytes FROM lm_rm_inbox')
+        ->fetch(PDO::FETCH_ASSOC);
+    if ((int)$row['n'] >= INBOX_MAX_FILES || (int)$row['bytes'] + strlen($data) > INBOX_MAX_BYTES) {
+        fail(507, 'Der Zwischenspeicher auf dem Server ist voll. Bitte zuerst das Programm starten, '
+            . 'damit die vorgemerkten Bilder abgeholt werden.');
+    }
+    $db->prepare('INSERT INTO lm_rm_inbox (created, name, body, dev) VALUES (?, ?, ?, ?)')->execute([time(), $name, $data, cur_dev()]);
+    json_out(['queued' => true, 'added' => 0, 'failed' => 0, 'pending' => inbox_pending($db)], 202);
+}
+
 /** Liederliste vom Programm in Stücken annehmen; erst wenn sie vollständig ist, gilt sie (die alte bleibt bis dahin). */
 function songs_put(PDO $db, array $in): void {
     $gen = (string)($in['hash'] ?? '');
@@ -2116,13 +2132,12 @@ function browser_api(string $api): void {
         if (!$ok || strlen($name) > 80) {
             fail(415, 'Nur Bilder (PNG, JPG, GIF, BMP, WebP) sind erlaubt.');
         }
-        if (!app_alive($db)) {
-            // Bilder werden nicht vorgemerkt (nur Lieder und Pausentimer) – erst hochladen, wenn das Programm läuft
-            fail(503, 'Das Programm läuft nicht. Bilder lassen sich nur hochladen, solange LiedManager läuft.');
-        }
         $data = read_body(MAX_UPLOAD);
         if ($data === '') {
             fail(400, 'Die Datei ist leer.');
+        }
+        if (!app_alive($db)) {
+            queue_upload($db, $name, $data);      // Programm läuft nicht: vormerken, beim nächsten Start abgeholt
         }
         run_job($db, 'upload', $name, base64_encode($data), UPLOAD_WAIT);
     }

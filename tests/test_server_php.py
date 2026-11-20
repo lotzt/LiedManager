@@ -107,8 +107,8 @@ def test_anmeldung_und_ansagen_vormerken(server):
 
     status, _ = http(f"{url}?api=state", headers=head)
     assert status == 503, "Programm läuft nicht: kein Zustand"
-    status, _ = http(f"{url}?api=upload&name=bild.png", b"\x89PNG", {**head, "Content-Type": "image/png"})
-    assert status == 503, "Bilder werden bei ausgeschaltetem Programm nicht angenommen"
+    status, text = http(f"{url}?api=upload&name=bild.png", b"\x89PNG", {**head, "Content-Type": "image/png"})
+    assert status == 202 and json.loads(text)["queued"], "Bilder werden bei ausgeschaltetem Programm vorgemerkt"
 
     status, text = http(f"{url}?api=pause_set", {"lines": ["Erste Ansage", "Zweite"], "end": "11:45"}, head)
     assert status == 202 and json.loads(text)["queued"], text
@@ -122,7 +122,10 @@ def test_anmeldung_und_ansagen_vormerken(server):
 
     # Programm startet: holt vorgemerkte Ansagen und Lieder ab und meldet sie als erledigt
     reply = app(server, "poll", hold=0)
-    assert reply["pause"] and reply["plan"], reply
+    assert reply["pause"] and reply["plan"] and reply["inbox"] == 1, reply
+    bild = app(server, "inbox_get")["item"]
+    assert bild["name"] == "bild.png"
+    app(server, "inbox_done", id=bild["id"])
     plan = app(server, "plan_get")["item"]
     assert json.loads(plan["body"])["songs"] == ["p012", "s5"]
     app(server, "plan_done", created=plan["created"])
@@ -130,7 +133,7 @@ def test_anmeldung_und_ansagen_vormerken(server):
     assert json.loads(item["body"]) == {"lines": ["Erste Ansage", "Zweite"]}, "Endzeit wird nicht vorgemerkt"
     app(server, "pause_done", created=item["created"])
     reply = app(server, "poll", hold=0)
-    assert not reply["pause"] and not reply["plan"], "nach dem Abholen ist nichts mehr vorgemerkt"
+    assert not reply["pause"] and not reply["plan"] and not reply["inbox"], "nach dem Abholen ist nichts mehr vorgemerkt"
 
     # Zustand vom Programm kommt im Browser an
     app(server, "state", data=json.dumps({"version": "test", "pause": {"lines": ["Erste Ansage"]}}))

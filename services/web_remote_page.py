@@ -84,7 +84,7 @@ HTML = """<!doctype html>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
-  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder und Ansagen</b> werden
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Bilder</b> werden
     gespeichert und beim nächsten Start übernommen. Lieder suchen geht auch: antippen merkt sie vor. Alles andere geht
     erst, wenn das Programm läuft.</p>
 
@@ -356,11 +356,12 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
 }
 select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
-/* Programm aus: bedienbar bleiben nur Liedsuche, vorgemerkte Lieder und Ansagen */
+/* Programm aus: bedienbar bleiben nur Liedsuche, vorgemerkte Lieder, Ansagen und Bilder hochladen */
 .offlinenote { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--rec); border-radius: 12px;
   color: var(--text-2); font-size: var(--fs-small); line-height: 1.4; }
 body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #endTime,
-body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images { opacity: .4; pointer-events: none; }
+body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images .card:first-child,
+body.offline #thumbs, body.offline #clearBtn { opacity: .4; pointer-events: none; }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
 /* Lied */
