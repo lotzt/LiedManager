@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 
 from database import DatabaseManager
 from paths import resolve_db_path
-from services import atem, songlog, xair
+from services import atem, songlog, songplan, xair
 from services.gong import Gong
 from services.playback import AudioPlayback
 from services.recorder import AudioRecorder
@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         # Bilder dürfen überall auf das Programm gezogen werden; die Seitenleiste wechselt dann auf „Bilder“
         self.setAcceptDrops(True)
         self._image_drop_filter = ImageDropFilter(self.add_images, self)
+
+        QTimer.singleShot(0, self.prefill_planned_song)   # vorgemerktes Lied gleich beim Start in die Suchzeile
 
     # ------------------------------------------------------------------
     # Aufbau
@@ -483,6 +485,7 @@ class MainWindow(QMainWindow):
         sonst wie das letzte Esc – Suche leeren und Audio entfernen."""
         if self._beamer_showing():
             self.search_input.clear()
+            self.prefill_planned_song()
         else:
             self.handle_escape()
 
@@ -517,7 +520,22 @@ class MainWindow(QMainWindow):
         self.search_input.blockSignals(False)
         self._hide_search_list()
         self._last_searched_query = ""
+        self.prefill_planned_song()
         self.search_input.setFocus()
+
+    def prefill_planned_song(self) -> None:
+        """Leere Suchzeile: das nächste vorgemerkte Lied eintragen (markiert – wer etwas tippt, ersetzt es).
+        Zweimal Enter zeigt es wie gewohnt; erst dann fällt es aus der Liste."""
+        if self.search_input.text().strip():
+            return
+        songs = songplan.get()
+        if not songs:
+            return
+        self.search_input.blockSignals(True)
+        self.search_input.setText(songs[0])
+        self.search_input.selectAll()
+        self.search_input.blockSignals(False)
+        self._last_searched_query = ""
 
     def _on_sync_requested(self, url: str, token: str):
         """„Jetzt abgleichen“ im Einstellungsdialog: Adresse/Token sind schon gespeichert, der Zeitgeber wird gestartet."""
@@ -768,6 +786,7 @@ class MainWindow(QMainWindow):
         atem.switch("presentation")
         if self.current_song_summary is not None:
             songlog.record(self.current_song_summary.nummer, self.current_song_summary.titel)
+            songplan.shown(self.current_song_summary.nummer)    # vorgemerktes Lied war auf dem Beamer: nächstes folgt
         screen_index = beamer_screen_index()
         self.close_beamer_windows(keep="presentation")   # Galerie und Kamera-Vollbild weichen dem Lied
 

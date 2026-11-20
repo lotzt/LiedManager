@@ -342,7 +342,7 @@ class CameraPanel(QWidget):
                 try:
                     stream[0].stop()
                 except Exception:
-                    pass
+                    log.debug("Kamera ließ sich nicht sauber stoppen", exc_info=True)
 
     def update_streams_from_settings(self):
         """Bestehende Kameras stoppen, Vollbildansichten schließen und Streams neu laden."""

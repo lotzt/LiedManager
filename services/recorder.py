@@ -200,7 +200,7 @@ class AudioRecorder(QObject):
             try:
                 self._wav.close()
             except Exception:
-                pass
+                log.debug("Aufnahme: WAV-Datei ließ sich nicht sauber schließen", exc_info=True)
             self._wav = None
 
     @staticmethod

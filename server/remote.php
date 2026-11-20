@@ -3,13 +3,13 @@
  * LiedManager – Website-Steuerung (All-Inkl: PHP + MySQL)
  *
  * Diese Datei wird aus remote_template.php erzeugt (python tools/build_remote_site.py) und enthält die Webseite
- * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – Zugangsdaten gehören in remote-zugang.php.
+ * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – Zugangsdaten gehören in liedmanager-zugang.php.
  *
  * Einrichtung: siehe README.md, Abschnitt „Web-Steuerung über die eigene Website“.
  *   1. KAS -> Datenbanken: MySQL-Datenbank anlegen (es darf dieselbe wie für sync.php sein, die Tabellen heißen anders).
  *   2. TOKEN (langes Zufallspasswort, kommt auch in die Einstellungen von LiedManager), PIN (Passwort für den
- *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten in remote-zugang.php eintragen (Vorlage:
- *      remote-zugang.beispiel.php) und diese Datei neben remote.php legen. Updates von remote.php überschreiben sie nie.
+ *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten in liedmanager-zugang.php eintragen (Vorlage:
+ *      liedmanager-zugang.beispiel.php) und diese Datei neben remote.php oder einen Ordner darüber legen.
  *   3. Datei per WebFTP in einen Ordner der Domain legen, z. B. https://deine-domain.de/steuerung/remote.php
  *      (die Domain braucht SSL). Zum Prüfen:  https://deine-domain.de/steuerung/remote.php?check
  *
@@ -18,10 +18,14 @@
  * geht zurück an den Browser. Das Programm muss dafür laufen und online sein.
  */
 
-// Zugangsdaten: am besten in der eigenen Datei „remote-zugang.php“ im selben Ordner (Vorlage: remote-zugang.beispiel.php).
-// Dann kann diese Datei bei Updates einfach ersetzt werden, ohne die Daten neu einzutragen.
-if (is_file(__DIR__ . '/remote-zugang.php')) {
-    require __DIR__ . '/remote-zugang.php';
+// Zugangsdaten: am besten in der gemeinsamen Datei „liedmanager-zugang.php“ (Vorlage: liedmanager-zugang.beispiel.php)
+// – im selben Ordner oder einen Ordner darüber, dann gilt sie für remote.php und sync.php zugleich. Diese Datei
+// kann bei Updates einfach ersetzt werden. (Ältere Einrichtung: remote-zugang.php im selben Ordner geht weiterhin.)
+foreach ([__DIR__ . '/remote-zugang.php', __DIR__ . '/liedmanager-zugang.php', dirname(__DIR__) . '/liedmanager-zugang.php'] as $zugang) {
+    if (is_file($zugang)) {
+        require $zugang;
+        break;
+    }
 }
 defined('TOKEN')   || define('TOKEN',   'HIER-LANGES-ZUFAELLIGES-TOKEN');
 defined('PIN')     || define('PIN',     'HIER-PASSWORT-FUER-DEN-BROWSER');
@@ -42,8 +46,6 @@ const MAX_UPLOAD     = 8388608;    // größtes Bild vom Handy (8 MB; als Text g
 const MAX_APP_BODY   = 4194304;    // größte Meldung vom Programm
 const MAX_FAILURES   = 5;          // falsche PINs je Adresse, dann Sperre (30 s, verdoppelt sich bis 10 min)
 const GLOBAL_FAILURES = 50;        // falsche PINs von allen Adressen in 10 Minuten, dann 5 Minuten Pause für alle
-const INBOX_MAX_FILES = 40;        // so viele Bilder werden für das Programm vorgemerkt, solange es nicht läuft
-const INBOX_MAX_BYTES = 50331648;  // … höchstens 48 MB zusammen
 const INBOX_KEEP     = 2592000;    // vorgemerkte Bilder werden nach 30 Tagen verworfen
 const REC_DIR        = 'aufnahmen'; // Ordner neben remote.php für die Aufnahmen aus dem Programm
 const REC_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg'];
@@ -108,6 +110,8 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>vorgemerkte Lieder, Ansagen und Endzeit</b> werden
+    gespeichert und beim nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
 
   <section id="tab-song" class="tabpage">
     <ul id="results" class="list" hidden></ul>
@@ -147,6 +151,19 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
         <button id="saveBtn" class="icon" title="Aufnahme speichern" aria-label="Aufnahme speichern" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
       </div>
     </div>
+
+    <section id="planPanel" class="pause">
+      <div class="pauseHead">
+        <button id="planTitle" class="ptitle" type="button" title="Klicken: Liste ein- oder ausklappen">Vorgemerkte Lieder</button>
+        <span id="planCount" class="chip" hidden></span>
+        <button id="planChevron" class="chev" type="button" title="Liste ein- oder ausklappen" aria-label="Vorgemerkte Lieder ein- oder ausklappen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <textarea id="planLines" class="plan" rows="6" spellcheck="false" autocapitalize="off" autocomplete="off" hidden
+                placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
+                title="Liednummern, eine pro Zeile"></textarea>
+      <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
+        erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht.</p>
+    </section>
 
     <section id="pausePanel" class="pause">
       <div class="pauseHead">
@@ -291,6 +308,8 @@ textarea {
   font-size: 11px; line-height: 20px; color: var(--text-2); letter-spacing: 0;
 }
 textarea.toowide, textarea.full { border-color: #E5503A; }
+textarea.plan { height: auto; font-family: inherit; font-size: 16px; line-height: 24px; overflow-y: auto; }
+#planPanel { margin-bottom: 8px; }
 input[type=time] { color-scheme: dark; }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:hover, textarea:hover { border-color: var(--accent-border); }
@@ -363,6 +382,11 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
 }
 select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
+/* Programm aus: nur was vorgemerkt werden kann bleibt bedienbar (Ansagen, Endzeit, Bilder hochladen) */
+.offlinenote { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--rec); border-radius: 12px;
+  color: var(--text-2); font-size: var(--fs-small); line-height: 1.4; }
+body.offline #q, body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #results,
+body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images { opacity: .4; pointer-events: none; }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
 /* Lied */
@@ -634,7 +658,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
       if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); loadOfflinePlan(); }
     });
   }
   /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
@@ -677,10 +701,8 @@ const PAGE_JS = <<<'LM_PAGE_JS'
       var src = r.pending || last;
       if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = (src.lines || []).join('\n'); lastFit = $('lines').value; }
       if (src.end && document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = src.end; }
-      $('pauseOffline').textContent = r.pending
-        ? 'Programm aus – die Änderungen sind vorgemerkt und werden beim nächsten Start übernommen.'
-        : 'Programm aus – Änderungen werden vorgemerkt und beim nächsten Start übernommen.';
-      $('pauseOffline').hidden = false;
+      $('pauseOffline').textContent = 'Deine Änderungen sind vorgemerkt.';
+      $('pauseOffline').hidden = !r.pending;
       layoutLines();
     }).catch(function () {});
   }
@@ -691,6 +713,8 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     var chip = $('conn');
     chip.textContent = ok ? 'verbunden' : 'getrennt';
     chip.className = 'chip' + (ok ? '' : ' bad');
+    document.body.classList.toggle('offline', !ok);
+    $('offlineNote').hidden = ok;
   }
 
   function render(s) {
@@ -702,6 +726,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     renderImages(s);
     renderCameras(s);
     renderPause(s.pause);
+    if (s.plan) { renderPlan(s.plan); }
     $('syncStatus').textContent = s.sync.enabled ? s.sync.status : 'Aus – im Programm unter Einstellungen → Lieder einrichten.';
     $('syncBtn').disabled = !s.sync.enabled;
     $('versionLabel').textContent = 'LiedManager ' + s.version;
@@ -983,6 +1008,35 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     box.classList.add('full');
     setTimeout(function () { box.classList.remove('full'); }, 400);
   }
+  /* ---------------- Vorgemerkte Lieder ---------------- */
+  var planOpen = false, offlinePlanAt = 0;
+  function setPlanOpen(open) {
+    planOpen = open;
+    $('planLines').hidden = !open;
+    $('planHint').hidden = !open;
+    $('planChevron').classList.toggle('open', open);
+  }
+  function planSongs() {
+    return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+  }
+  function renderPlan(p) {
+    var songs = (p && p.songs) || [];
+    if (document.activeElement !== $('planLines') && !$('planLines').dataset.dirty) { $('planLines').value = songs.join('\n'); }
+    $('planCount').textContent = songs.length;
+    $('planCount').hidden = songs.length === 0;
+  }
+  function loadOfflinePlan() {
+    if (Date.now() - offlinePlanAt < 5000) { return; }
+    offlinePlanAt = Date.now();
+    request('GET', '/api/plan').then(function (r) { renderPlan(r.pending || r.last || { songs: [] }); }).catch(function () {});
+  }
+  function sendPlan() {
+    return act('plan_set', { songs: planSongs() }, true).then(function (r) {
+      if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
+      delete $('planLines').dataset.dirty;
+    });
+  }
+
   function setPauseOpen(open) {
     pauseOpen = open;
     $('lines').hidden = !open;
@@ -1163,6 +1217,10 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   on('lines', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('endTime', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('pauseTitle', 'click', function () { setPauseOpen(!pauseOpen); });
+  on('planTitle', 'click', function () { setPlanOpen(!planOpen); });
+  on('planChevron', 'click', function () { setPlanOpen(!planOpen); });
+  on('planLines', 'input', function () { $('planLines').dataset.dirty = '1'; });
+  on('planLines', 'change', function () { sendPlan().catch(function (err) { toast(err.message, true); }); });
   on('pauseChevron', 'click', function () { setPauseOpen(!pauseOpen); });
   on('pauseBtn', 'click', function () {
     sendPauseSettings().then(function () { return act('pause_toggle'); }).catch(function (err) { toast(err.message, true); });
@@ -1348,6 +1406,11 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_pause($db);                  // Update: Ansagen vormerken
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_plan LIMIT 1');
+    } catch (PDOException $e) {
+        create_plan($db);                   // Update: Lieder vormerken
+    }
     return $db;
 }
 
@@ -1427,6 +1490,21 @@ function create_pause(PDO $db): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
 }
 
+/** Vorgemerkte Lieder (Liednummern), bearbeitet während das Programm nicht lief (je Computer die letzte Fassung). */
+function create_plan(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_plan (
+        dev     VARCHAR(40) NOT NULL PRIMARY KEY,
+        created INT NOT NULL,
+        body    MEDIUMTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+function plan_pending(PDO $db): bool {
+    $q = $db->prepare('SELECT 1 FROM lm_rm_plan WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    return (bool)$q->fetchColumn();
+}
+
 function pause_pending(PDO $db): bool {
     $q = $db->prepare('SELECT 1 FROM lm_rm_pause WHERE dev = ?');
     $q->execute([cur_dev()]);
@@ -1443,12 +1521,13 @@ function create_inbox(PDO $db): void {
 }
 
 function create_reports(PDO $db): void {
+    // `system` in Backticks: ab MySQL 8 ist „system“ ein reserviertes Wort
     $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_reports (
         id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
         created INT NOT NULL,
         fp      CHAR(16) NOT NULL,
         version VARCHAR(40) NOT NULL,
-        system  VARCHAR(80) NOT NULL,
+        `system` VARCHAR(80) NOT NULL,
         title   VARCHAR(300) NOT NULL,
         detail  TEXT NULL,
         n       INT NOT NULL DEFAULT 1,
@@ -1467,7 +1546,7 @@ function store_report(PDO $db, array $in): void {
     $update = $db->prepare('UPDATE lm_rm_reports SET n = n + 1, created = ? WHERE fp = ? AND created > ?');
     $update->execute([time(), $fp, time() - 86400]);
     if ($update->rowCount() === 0) {
-        $db->prepare('INSERT INTO lm_rm_reports (created, fp, version, system, title, detail) VALUES (?, ?, ?, ?, ?, ?)')
+        $db->prepare('INSERT INTO lm_rm_reports (created, fp, version, `system`, title, detail) VALUES (?, ?, ?, ?, ?, ?)')
             ->execute([time(), $fp, substr((string)($in['version'] ?? ''), 0, 40), substr((string)($in['system'] ?? ''), 0, 80),
                 mb_substr((string)($in['title'] ?? ''), 0, 300), mb_substr((string)($in['detail'] ?? ''), 0, 6000)]);
     }
@@ -1478,19 +1557,6 @@ function inbox_pending(PDO $db): int {
     $q = $db->prepare('SELECT COUNT(*) FROM lm_rm_inbox WHERE dev = ?');
     $q->execute([cur_dev()]);
     return (int)$q->fetchColumn();
-}
-
-/** Bild vormerken, solange das Programm nicht läuft; es wird beim nächsten Verbinden abgeholt. */
-function queue_upload(PDO $db, string $name, string $data): void {
-    $db->prepare('DELETE FROM lm_rm_inbox WHERE created < ?')->execute([time() - INBOX_KEEP]);
-    $row = $db->query('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS bytes FROM lm_rm_inbox')
-        ->fetch(PDO::FETCH_ASSOC);
-    if ((int)$row['n'] >= INBOX_MAX_FILES || (int)$row['bytes'] + strlen($data) > INBOX_MAX_BYTES) {
-        fail(507, 'Der Zwischenspeicher auf dem Server ist voll. Bitte zuerst das Programm starten, '
-            . 'damit die vorgemerkten Bilder abgeholt werden.');
-    }
-    $db->prepare('INSERT INTO lm_rm_inbox (created, name, body, dev) VALUES (?, ?, ?, ?)')->execute([time(), $name, $data, cur_dev()]);
-    json_out(['queued' => true, 'added' => 0, 'failed' => 0, 'pending' => inbox_pending($db)], 202);
 }
 
 function app_alive(PDO $db): bool {
@@ -1518,6 +1584,7 @@ function device_cleanup(PDO $db): void {
         foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $old) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -1787,12 +1854,13 @@ function browser_api(string $api): void {
         if (!$ok || strlen($name) > 80) {
             fail(415, 'Nur Bilder (PNG, JPG, GIF, BMP, WebP) sind erlaubt.');
         }
+        if (!app_alive($db)) {
+            // Bilder werden nicht vorgemerkt (nur Lieder und Pausentimer) – erst hochladen, wenn das Programm läuft
+            fail(503, 'Das Programm läuft nicht. Bilder lassen sich nur hochladen, solange LiedManager läuft.');
+        }
         $data = read_body(MAX_UPLOAD);
         if ($data === '') {
             fail(400, 'Die Datei ist leer.');
-        }
-        if (!app_alive($db)) {
-            queue_upload($db, $name, $data);      // Programm läuft nicht: vormerken statt ablehnen
         }
         run_job($db, 'upload', $name, base64_encode($data), UPLOAD_WAIT);
     }
@@ -1811,6 +1879,27 @@ function browser_api(string $api): void {
         $last = is_array($state) && is_array($state['pause'] ?? null) ? $state['pause'] : null;
         json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
     }
+    if ($api === 'plan' && $method === 'GET') {
+        // Vorgemerkte Lieder ohne laufendes Programm: vorgemerkte Fassung, sonst die zuletzt gemeldete
+        $q = $db->prepare('SELECT body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $pending = $q->fetchColumn();
+        $q = $db->prepare('SELECT state FROM lm_rm_devices WHERE name = ?');
+        $q->execute([cur_dev()]);
+        $state = json_decode((string)$q->fetchColumn(), true);
+        $last = is_array($state) && is_array($state['plan'] ?? null) ? $state['plan'] : null;
+        json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
+    }
+    if ($api === 'plan_set' && $method === 'POST' && !app_alive($db)) {
+        // Programm läuft nicht: Liste vormerken, beim nächsten Start übernimmt das Programm sie
+        $raw = read_body(MAX_JSON);
+        $args = json_decode($raw, true);
+        if (!is_array($args) || !is_array($args['songs'] ?? null)) {
+            fail(400, 'Ungültige Liederliste.');
+        }
+        $db->prepare('REPLACE INTO lm_rm_plan (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
+        json_out(['ok' => true, 'queued' => true], 202);
+    }
     if ($api === 'pause_set' && $method === 'POST' && !app_alive($db)) {
         // Programm läuft nicht: Ansagen vormerken, beim nächsten Start übernimmt das Programm sie
         $raw = read_body(MAX_JSON);
@@ -1822,7 +1911,7 @@ function browser_api(string $api): void {
         json_out(['ok' => true, 'queued' => true], 202);
     }
     if ($api === 'reports' && $method === 'GET') {
-        $rows = $db->query('SELECT id, created, version, system, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
+        $rows = $db->query('SELECT id, created, version, `system`, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
             ->fetchAll(PDO::FETCH_ASSOC);
         json_out(['reports' => $rows]);
     }
@@ -1878,6 +1967,7 @@ function app_api(): void {
         $lastTouch = time();
         $pending = inbox_pending($db);               // vorgemerkte Bilder: Programm soll sie gleich abholen
         $pausePending = pause_pending($db);          // vorgemerkte Ansagen: ebenso
+        $planPending = plan_pending($db);            // vorgemerkte Lieder: ebenso
         while (true) {
             $select->execute([cur_dev()]);
             $jobs = [];
@@ -1888,8 +1978,9 @@ function app_api(): void {
                         'body' => $job['body'] === null ? '' : (string)$job['body']];
                 }
             }
-            if ($jobs || $pending > 0 || $pausePending || microtime(true) >= $deadline) {
-                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending]);
+            if ($jobs || $pending > 0 || $pausePending || $planPending || microtime(true) >= $deadline) {
+                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending,
+                    'plan' => $planPending]);
             }
             if (time() - $lastTouch >= 5) {
                 touch_alive($db);
@@ -1941,6 +2032,18 @@ function app_api(): void {
             'body' => base64_encode((string)$row['body'])] : null]);
     }
 
+    if ($action === 'plan_get') {
+        $q = $db->prepare('SELECT created, body FROM lm_rm_plan WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        json_out(['item' => $row ? ['created' => (int)$row['created'], 'body' => (string)$row['body']] : null]);
+    }
+
+    if ($action === 'plan_done') {
+        $db->prepare('DELETE FROM lm_rm_plan WHERE dev = ? AND created = ?')->execute([cur_dev(), (int)($in['created'] ?? 0)]);
+        json_out(['ok' => true]);
+    }
+
     if ($action === 'pause_get') {
         $q = $db->prepare('SELECT created, body FROM lm_rm_pause WHERE dev = ?');
         $q->execute([cur_dev()]);
@@ -1965,6 +2068,7 @@ function app_api(): void {
         if ($old !== '' && $old !== cur_dev()) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_plan SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -1992,8 +2096,8 @@ function check_page(): void {
     $lines[] = 'PHP 7.4 oder neuer: ' . (version_compare(PHP_VERSION, '7.4.0', '>=') ? 'OK' : 'zu alt');
     $lines[] = 'Verbindung per HTTPS: ' . (is_https() ? 'OK' : 'NEIN – ohne HTTPS verweigert die Seite den Betrieb');
     $problems = config_problems();
-    $lines[] = 'Zugangsdatei remote-zugang.php: ' . (is_file(__DIR__ . '/remote-zugang.php') ? 'vorhanden' : 'fehlt (Daten stehen dann in remote.php selbst)');
-    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – in remote-zugang.php eintragen (neben remote.php)' : 'OK');
+    $lines[] = 'Zugangsdatei: ' . (is_file(__DIR__ . '/remote-zugang.php') ? 'remote-zugang.php' : (is_file(__DIR__ . '/liedmanager-zugang.php') ? 'liedmanager-zugang.php' : (is_file(dirname(__DIR__) . '/liedmanager-zugang.php') ? 'liedmanager-zugang.php (Ordner darüber)' : 'fehlt (Daten stehen dann in remote.php selbst)')));
+    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – in liedmanager-zugang.php eintragen' : 'OK');
     foreach ($problems as $problem) {
         $lines[] = '  – ' . $problem;
     }
@@ -2039,7 +2143,7 @@ try {
         fail(400, 'Nur über HTTPS erreichbar.');
     }
     if (!configured()) {
-        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in remote-zugang.php eintragen und neben remote.php hochladen.');
+        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in liedmanager-zugang.php eintragen und hochladen.');
     }
     if (isset($_GET['api'])) {
         browser_api((string)$_GET['api']);

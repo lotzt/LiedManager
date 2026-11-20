@@ -5,7 +5,8 @@
  * Einrichtung: siehe README.md, Abschnitt „Datenbank auf mehreren Geräten abgleichen“.
  *   1. KAS -> Datenbanken: neue MySQL-Datenbank anlegen.
  *   2. TOKEN (langes Zufallspasswort, dasselbe kommt in jedes LiedManager) und die Datenbank-Zugangsdaten in
- *      sync-zugang.php eintragen (Vorlage: sync-zugang.beispiel.php) und diese Datei neben sync.php legen.
+ *      liedmanager-zugang.php eintragen (Vorlage: liedmanager-zugang.beispiel.php) und neben sync.php oder einen
+ *      Ordner darüber legen – dieselbe Datei wie für remote.php.
  *   3. Diese Datei per WebFTP in einen Ordner der Domain legen, z. B.  https://deine-domain.de/sync/sync.php
  *
  * Der Server speichert pro Lied eine Zeile. Jedes Lied wird einzeln übertragen, damit große Audios/Bilder
@@ -13,10 +14,14 @@
  * jüngere Änderung (gleiche Zeit: größere Geräte-Kennung) – genau wie im Programm.
  */
 
-// Zugangsdaten: am besten in der eigenen Datei „sync-zugang.php“ im selben Ordner (Vorlage: sync-zugang.beispiel.php).
-// Dann kann diese Datei bei Updates einfach ersetzt werden, ohne die Daten neu einzutragen.
-if (is_file(__DIR__ . '/sync-zugang.php')) {
-    require __DIR__ . '/sync-zugang.php';
+// Zugangsdaten: am besten in der gemeinsamen Datei „liedmanager-zugang.php“ (Vorlage: liedmanager-zugang.beispiel.php)
+// – im selben Ordner oder einen Ordner darüber, dann gilt sie für remote.php und sync.php zugleich. Diese Datei
+// kann bei Updates einfach ersetzt werden. (Ältere Einrichtung: sync-zugang.php im selben Ordner geht weiterhin.)
+foreach ([__DIR__ . '/sync-zugang.php', __DIR__ . '/liedmanager-zugang.php', dirname(__DIR__) . '/liedmanager-zugang.php'] as $zugang) {
+    if (is_file($zugang)) {
+        require $zugang;
+        break;
+    }
 }
 defined('TOKEN')   || define('TOKEN',   'HIER-LANGES-ZUFAELLIGES-TOKEN');
 defined('DB_HOST') || define('DB_HOST', 'localhost');

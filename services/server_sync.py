@@ -552,7 +552,7 @@ class ServerSync:
             try:
                 self._on_phase(text)
             except Exception:  # noqa: BLE001 – die Anzeige darf den Abgleich nie stören
-                pass
+                log.debug("Abgleich: Fortschrittsanzeige fehlgeschlagen", exc_info=True)
 
     def _report(self, done: int, total: int) -> None:
         if self._on_progress is not None:

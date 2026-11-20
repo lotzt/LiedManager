@@ -19,5 +19,6 @@ KEY_ATEM_DEFAULT_CHANNEL = "atem_default_channel"   # ATEM-Eingang nach dem Schl
 KEY_ATEM_START_CHANNEL = "atem_start_channel"       # ATEM-Eingang beim Programmstart (0 = Schwarz)
 KEY_AUDIO_1_NAME = "audio_1_name"                  # Anzeigename von Audio 1 (z. B. „Piano“)
 KEY_AUDIO_2_NAME = "audio_2_name"                  # Anzeigename von Audio 2 (z. B. „Gesang“)
+KEY_SONG_PLAN = "song_plan"                       # vorgemerkte Liednummern (JSON-Liste)
 KEY_MAIN_WINDOW_X = "main_window_x"                 # Position des Hauptfensters
 KEY_MAIN_WINDOW_Y = "main_window_y"                 # Position des Hauptfensters
