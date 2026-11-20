@@ -57,9 +57,9 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 **Server einrichten (einmalig):**
 
 1. Beim Webhoster eine MySQL-Datenbank anlegen (bei All-Inkl: KAS → *Datenbanken*; Name, Benutzer, Passwort notieren).
-2. `server/sync-zugang.beispiel.php` in `sync-zugang.php` umbenennen und dort `TOKEN` (selbst ausgedachtes, langes
-   Zufallspasswort), `DB_NAME`, `DB_USER` und `DB_PASS` eintragen. Diese Datei kommt neben `sync.php` auf den Server
-   und wird bei Updates nie überschrieben.
+2. `server/liedmanager-zugang.beispiel.php` in `liedmanager-zugang.php` umbenennen und dort `TOKEN` (selbst ausgedachtes,
+   langes Zufallspasswort), `DB_NAME`, `DB_USER` und `DB_PASS` eintragen. Diese **eine** Datei gilt für `sync.php` und
+   `remote.php` zugleich; sie kommt neben die Dateien oder einen Ordner darüber und wird bei Updates nie überschrieben.
 3. Beide Dateien per FTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/sync/sync.php`
    (die Domain braucht SSL, also `https://`). Die Tabellen legt das Skript beim ersten Aufruf selbst an.
 
@@ -104,9 +104,9 @@ nicht, zeigt die Seite „getrennt“.
 **Server einrichten (einmalig):**
 
 1. Beim Webhoster eine MySQL-Datenbank anlegen oder die vom Abgleich mitbenutzen (die Tabellen heißen anders: `lm_rm_…`).
-2. `server/remote-zugang.beispiel.php` in `remote-zugang.php` umbenennen und dort `TOKEN` (langes Zufallspasswort, kommt
-   auch ins Programm), `PIN` (Passwort für den Browser, mindestens 8 Zeichen) sowie `DB_NAME`, `DB_USER`, `DB_PASS` eintragen.
-3. `remote.php` und `remote-zugang.php` per FTP in denselben Ordner der Domain legen, z. B. `technik.deine-domain.de/steuerung/remote.php` (mit SSL). Zum Prüfen
+2. In `liedmanager-zugang.php` (siehe Abgleich oben, sonst aus `server/liedmanager-zugang.beispiel.php`) `TOKEN`, `PIN`
+   (Passwort für den Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten eintragen.
+3. `remote.php` per FTP auf die Domain legen, die Zugangsdatei daneben oder einen Ordner darüber, z. B. `technik.deine-domain.de/steuerung/remote.php` (mit SSL). Zum Prüfen
    `…/remote.php?check` öffnen: Dort steht, ob Zugangsdaten und Datenbank in Ordnung sind – und, falls nicht, welcher Wert
    (z. B. „PIN ist zu kurz“) noch nicht stimmt. Die Seite zeigt auch, wann die Datei auf dem Server zuletzt geändert wurde
    (so erkennst du, ob wirklich die neue Datei hochgeladen wurde). Die Tabellen legt die Datei beim
@@ -114,10 +114,11 @@ nicht, zeigt die Seite „getrennt“.
 
 **Im Programm:** *Einstellungen → Remote*: Haken setzen, Adresse von `remote.php` und
 dasselbe Token eintragen. Die Statuszeile zeigt „Verbunden – im Browser öffnen: …“. Diese Adresse öffnest du auf dem Handy
-und meldest dich mit der PIN aus `remote-zugang.php` an.
+und meldest dich mit der PIN aus `liedmanager-zugang.php` an.
 
 **Updates:** Eine neue `remote.php` oder `sync.php` einfach hochladen und die alte ersetzen – die Zugangsdaten in
-`remote-zugang.php` bzw. `sync-zugang.php` bleiben unberührt. (Ältere Einrichtungen mit den Daten direkt in der Datei
+`liedmanager-zugang.php` bleiben unberührt. Beispiel: `…/liedmanager-zugang.php`, `…/steuerung/remote.php`, `…/sync/sync.php`.
+(Ältere `remote-zugang.php`/`sync-zugang.php` im selben Ordner werden weiterhin gelesen.) (Ältere Einrichtungen mit den Daten direkt in der Datei
 funktionieren weiter; beim nächsten Update am besten auf die Zugangsdatei umstellen.)
 
 Sicherheit: HTTPS ist Pflicht (ohne verweigern Programm und Seite den Dienst). Angemeldet wird auf der Website selbst; nur

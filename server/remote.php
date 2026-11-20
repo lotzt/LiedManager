@@ -3,13 +3,13 @@
  * LiedManager – Website-Steuerung (All-Inkl: PHP + MySQL)
  *
  * Diese Datei wird aus remote_template.php erzeugt (python tools/build_remote_site.py) und enthält die Webseite
- * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – Zugangsdaten gehören in remote-zugang.php.
+ * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – Zugangsdaten gehören in liedmanager-zugang.php.
  *
  * Einrichtung: siehe README.md, Abschnitt „Web-Steuerung über die eigene Website“.
  *   1. KAS -> Datenbanken: MySQL-Datenbank anlegen (es darf dieselbe wie für sync.php sein, die Tabellen heißen anders).
  *   2. TOKEN (langes Zufallspasswort, kommt auch in die Einstellungen von LiedManager), PIN (Passwort für den
- *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten in remote-zugang.php eintragen (Vorlage:
- *      remote-zugang.beispiel.php) und diese Datei neben remote.php legen. Updates von remote.php überschreiben sie nie.
+ *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten in liedmanager-zugang.php eintragen (Vorlage:
+ *      liedmanager-zugang.beispiel.php) und diese Datei neben remote.php oder einen Ordner darüber legen.
  *   3. Datei per WebFTP in einen Ordner der Domain legen, z. B. https://deine-domain.de/steuerung/remote.php
  *      (die Domain braucht SSL). Zum Prüfen:  https://deine-domain.de/steuerung/remote.php?check
  *
@@ -18,10 +18,14 @@
  * geht zurück an den Browser. Das Programm muss dafür laufen und online sein.
  */
 
-// Zugangsdaten: am besten in der eigenen Datei „remote-zugang.php“ im selben Ordner (Vorlage: remote-zugang.beispiel.php).
-// Dann kann diese Datei bei Updates einfach ersetzt werden, ohne die Daten neu einzutragen.
-if (is_file(__DIR__ . '/remote-zugang.php')) {
-    require __DIR__ . '/remote-zugang.php';
+// Zugangsdaten: am besten in der gemeinsamen Datei „liedmanager-zugang.php“ (Vorlage: liedmanager-zugang.beispiel.php)
+// – im selben Ordner oder einen Ordner darüber, dann gilt sie für remote.php und sync.php zugleich. Diese Datei
+// kann bei Updates einfach ersetzt werden. (Ältere Einrichtung: remote-zugang.php im selben Ordner geht weiterhin.)
+foreach ([__DIR__ . '/remote-zugang.php', __DIR__ . '/liedmanager-zugang.php', dirname(__DIR__) . '/liedmanager-zugang.php'] as $zugang) {
+    if (is_file($zugang)) {
+        require $zugang;
+        break;
+    }
 }
 defined('TOKEN')   || define('TOKEN',   'HIER-LANGES-ZUFAELLIGES-TOKEN');
 defined('PIN')     || define('PIN',     'HIER-PASSWORT-FUER-DEN-BROWSER');
@@ -1992,8 +1996,8 @@ function check_page(): void {
     $lines[] = 'PHP 7.4 oder neuer: ' . (version_compare(PHP_VERSION, '7.4.0', '>=') ? 'OK' : 'zu alt');
     $lines[] = 'Verbindung per HTTPS: ' . (is_https() ? 'OK' : 'NEIN – ohne HTTPS verweigert die Seite den Betrieb');
     $problems = config_problems();
-    $lines[] = 'Zugangsdatei remote-zugang.php: ' . (is_file(__DIR__ . '/remote-zugang.php') ? 'vorhanden' : 'fehlt (Daten stehen dann in remote.php selbst)');
-    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – in remote-zugang.php eintragen (neben remote.php)' : 'OK');
+    $lines[] = 'Zugangsdatei: ' . (is_file(__DIR__ . '/remote-zugang.php') ? 'remote-zugang.php' : (is_file(__DIR__ . '/liedmanager-zugang.php') ? 'liedmanager-zugang.php' : (is_file(dirname(__DIR__) . '/liedmanager-zugang.php') ? 'liedmanager-zugang.php (Ordner darüber)' : 'fehlt (Daten stehen dann in remote.php selbst)')));
+    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – in liedmanager-zugang.php eintragen' : 'OK');
     foreach ($problems as $problem) {
         $lines[] = '  – ' . $problem;
     }
@@ -2039,7 +2043,7 @@ try {
         fail(400, 'Nur über HTTPS erreichbar.');
     }
     if (!configured()) {
-        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in remote-zugang.php eintragen und neben remote.php hochladen.');
+        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in liedmanager-zugang.php eintragen und hochladen.');
     }
     if (isset($_GET['api'])) {
         browser_api((string)$_GET['api']);

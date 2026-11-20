@@ -32,10 +32,7 @@ pausentimer/
 *.pptx
 
 # Echte Zugangsdaten für die Website – nie ins Repository
-server/remote-zugang.php
-server/sync-zugang.php
-remote-zugang.php
-sync-zugang.php
+*-zugang.php
 
 # Finder-Kopien
 * 2.*
