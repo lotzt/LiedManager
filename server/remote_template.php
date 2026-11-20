@@ -3,12 +3,13 @@
  * LiedManager – Website-Steuerung (All-Inkl: PHP + MySQL)
  *
  * Diese Datei wird aus remote_template.php erzeugt (python tools/build_remote_site.py) und enthält die Webseite
- * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – nur die Zugangsdaten unten eintragen.
+ * der Fernsteuerung gleich mit. NICHT von Hand die Seite ändern – Zugangsdaten gehören in remote-zugang.php.
  *
  * Einrichtung: siehe README.md, Abschnitt „Web-Steuerung über die eigene Website“.
  *   1. KAS -> Datenbanken: MySQL-Datenbank anlegen (es darf dieselbe wie für sync.php sein, die Tabellen heißen anders).
- *   2. Unten TOKEN (langes Zufallspasswort, kommt auch in die Einstellungen von LiedManager), PIN (Passwort für den
- *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten eintragen.
+ *   2. TOKEN (langes Zufallspasswort, kommt auch in die Einstellungen von LiedManager), PIN (Passwort für den
+ *      Browser, mindestens 8 Zeichen) und die Datenbank-Zugangsdaten in remote-zugang.php eintragen (Vorlage:
+ *      remote-zugang.beispiel.php) und diese Datei neben remote.php legen. Updates von remote.php überschreiben sie nie.
  *   3. Datei per WebFTP in einen Ordner der Domain legen, z. B. https://deine-domain.de/steuerung/remote.php
  *      (die Domain braucht SSL). Zum Prüfen:  https://deine-domain.de/steuerung/remote.php?check
  *
@@ -17,12 +18,17 @@
  * geht zurück an den Browser. Das Programm muss dafür laufen und online sein.
  */
 
-const TOKEN   = 'HIER-LANGES-ZUFAELLIGES-TOKEN';
-const PIN     = 'HIER-PASSWORT-FUER-DEN-BROWSER';
-const DB_HOST = 'localhost';
-const DB_NAME = 'dXXXXXXX';
-const DB_USER = 'dXXXXXXX';
-const DB_PASS = 'HIER-DB-PASSWORT';
+// Zugangsdaten: am besten in der eigenen Datei „remote-zugang.php“ im selben Ordner (Vorlage: remote-zugang.beispiel.php).
+// Dann kann diese Datei bei Updates einfach ersetzt werden, ohne die Daten neu einzutragen.
+if (is_file(__DIR__ . '/remote-zugang.php')) {
+    require __DIR__ . '/remote-zugang.php';
+}
+defined('TOKEN')   || define('TOKEN',   'HIER-LANGES-ZUFAELLIGES-TOKEN');
+defined('PIN')     || define('PIN',     'HIER-PASSWORT-FUER-DEN-BROWSER');
+defined('DB_HOST') || define('DB_HOST', 'localhost');
+defined('DB_NAME') || define('DB_NAME', 'dXXXXXXX');
+defined('DB_USER') || define('DB_USER', 'dXXXXXXX');
+defined('DB_PASS') || define('DB_PASS', 'HIER-DB-PASSWORT');
 
 const FORMAT         = 1;          // Protokollversion (Programm und Website müssen zusammenpassen)
 const APP_TIMEOUT    = 25;         // so lange ohne Lebenszeichen gilt das Programm als nicht erreichbar (Sekunden)
@@ -207,6 +213,11 @@ function db(): PDO {
     } catch (PDOException $e) {
         create_reports($db);                // Update von einer älteren remote.php
     }
+    try {
+        $db->query('SELECT 1 FROM lm_rm_pause LIMIT 1');
+    } catch (PDOException $e) {
+        create_pause($db);                  // Update: Ansagen vormerken
+    }
     return $db;
 }
 
@@ -275,6 +286,21 @@ function create_tables(PDO $db): void {
         state MEDIUMTEXT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     $db->exec('INSERT IGNORE INTO lm_rm_meta (id, alive, state) VALUES (1, 0, NULL)');
+}
+
+/** Ansagen, die bearbeitet wurden, während das Programm nicht lief (je Computer die letzte Fassung). */
+function create_pause(PDO $db): void {
+    $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_pause (
+        dev     VARCHAR(40) NOT NULL PRIMARY KEY,
+        created INT NOT NULL,
+        body    MEDIUMTEXT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+}
+
+function pause_pending(PDO $db): bool {
+    $q = $db->prepare('SELECT 1 FROM lm_rm_pause WHERE dev = ?');
+    $q->execute([cur_dev()]);
+    return (bool)$q->fetchColumn();
 }
 
 function create_inbox(PDO $db): void {
@@ -361,6 +387,7 @@ function device_cleanup(PDO $db): void {
         $q->execute([$did, cur_dev()]);
         foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $old) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -643,6 +670,27 @@ function browser_api(string $api): void {
     if ($api === 'inbox' && $method === 'GET') {
         json_out(['pending' => inbox_pending($db)]);
     }
+    if ($api === 'pause' && $method === 'GET') {
+        // Für die Bearbeitung ohne laufendes Programm: vorgemerkte Ansagen, sonst die zuletzt gemeldeten
+        $q = $db->prepare('SELECT body FROM lm_rm_pause WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $pending = $q->fetchColumn();
+        $q = $db->prepare('SELECT state FROM lm_rm_devices WHERE name = ?');
+        $q->execute([cur_dev()]);
+        $state = json_decode((string)$q->fetchColumn(), true);
+        $last = is_array($state) && is_array($state['pause'] ?? null) ? $state['pause'] : null;
+        json_out(['pending' => $pending === false ? null : json_decode((string)$pending, true), 'last' => $last]);
+    }
+    if ($api === 'pause_set' && $method === 'POST' && !app_alive($db)) {
+        // Programm läuft nicht: Ansagen vormerken, beim nächsten Start übernimmt das Programm sie
+        $raw = read_body(MAX_JSON);
+        $args = json_decode($raw, true);
+        if (!is_array($args) || !is_array($args['lines'] ?? null)) {
+            fail(400, 'Ungültige Ansagen.');
+        }
+        $db->prepare('REPLACE INTO lm_rm_pause (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
+        json_out(['ok' => true, 'queued' => true], 202);
+    }
     if ($api === 'reports' && $method === 'GET') {
         $rows = $db->query('SELECT id, created, version, system, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
             ->fetchAll(PDO::FETCH_ASSOC);
@@ -699,6 +747,7 @@ function app_api(): void {
         $claim = $db->prepare('UPDATE lm_rm_jobs SET status = 1 WHERE id = ? AND status = 0');
         $lastTouch = time();
         $pending = inbox_pending($db);               // vorgemerkte Bilder: Programm soll sie gleich abholen
+        $pausePending = pause_pending($db);          // vorgemerkte Ansagen: ebenso
         while (true) {
             $select->execute([cur_dev()]);
             $jobs = [];
@@ -709,8 +758,8 @@ function app_api(): void {
                         'body' => $job['body'] === null ? '' : (string)$job['body']];
                 }
             }
-            if ($jobs || $pending > 0 || microtime(true) >= $deadline) {
-                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending]);
+            if ($jobs || $pending > 0 || $pausePending || microtime(true) >= $deadline) {
+                json_out(['format' => FORMAT, 'jobs' => $jobs, 'inbox' => $pending, 'pause' => $pausePending]);
             }
             if (time() - $lastTouch >= 5) {
                 touch_alive($db);
@@ -762,6 +811,19 @@ function app_api(): void {
             'body' => base64_encode((string)$row['body'])] : null]);
     }
 
+    if ($action === 'pause_get') {
+        $q = $db->prepare('SELECT created, body FROM lm_rm_pause WHERE dev = ?');
+        $q->execute([cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        json_out(['item' => $row ? ['created' => (int)$row['created'], 'body' => (string)$row['body']] : null]);
+    }
+
+    if ($action === 'pause_done') {
+        // nur genau diese Fassung löschen: wurde inzwischen neu vorgemerkt, bleibt die neue stehen
+        $db->prepare('DELETE FROM lm_rm_pause WHERE dev = ? AND created = ?')->execute([cur_dev(), (int)($in['created'] ?? 0)]);
+        json_out(['ok' => true]);
+    }
+
     if ($action === 'inbox_done') {
         $db->prepare('DELETE FROM lm_rm_inbox WHERE id = ?')->execute([(int)($in['id'] ?? 0)]);
         json_out(['ok' => true]);
@@ -772,6 +834,7 @@ function app_api(): void {
         $old = dev_clean((string)($in['old'] ?? ''));
         if ($old !== '' && $old !== cur_dev()) {
             $db->prepare('UPDATE lm_rm_inbox SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
+            $db->prepare('UPDATE IGNORE lm_rm_pause SET dev = ? WHERE dev = ?')->execute([cur_dev(), $old]);
             $db->prepare('DELETE FROM lm_rm_jobs WHERE dev = ?')->execute([$old]);
             $db->prepare('DELETE FROM lm_rm_devices WHERE name = ?')->execute([$old]);
         }
@@ -799,7 +862,8 @@ function check_page(): void {
     $lines[] = 'PHP 7.4 oder neuer: ' . (version_compare(PHP_VERSION, '7.4.0', '>=') ? 'OK' : 'zu alt');
     $lines[] = 'Verbindung per HTTPS: ' . (is_https() ? 'OK' : 'NEIN – ohne HTTPS verweigert die Seite den Betrieb');
     $problems = config_problems();
-    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – oben in der Datei eintragen' : 'OK');
+    $lines[] = 'Zugangsdatei remote-zugang.php: ' . (is_file(__DIR__ . '/remote-zugang.php') ? 'vorhanden' : 'fehlt (Daten stehen dann in remote.php selbst)');
+    $lines[] = 'Zugangsdaten eingetragen (TOKEN, PIN, Datenbank): ' . ($problems ? 'NEIN – in remote-zugang.php eintragen (neben remote.php)' : 'OK');
     foreach ($problems as $problem) {
         $lines[] = '  – ' . $problem;
     }
@@ -845,7 +909,7 @@ try {
         fail(400, 'Nur über HTTPS erreichbar.');
     }
     if (!configured()) {
-        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in remote.php eintragen und die Datei neu hochladen.');
+        fail(503, 'Noch nicht eingerichtet: ' . implode('; ', config_problems()) . '. Bitte in remote-zugang.php eintragen und neben remote.php hochladen.');
     }
     if (isset($_GET['api'])) {
         browser_api((string)$_GET['api']);

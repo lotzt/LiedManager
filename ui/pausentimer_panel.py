@@ -15,6 +15,10 @@ from ui import widgets as w
 DEFAULT_END_TIME = QTime(11, 30)   # Endzeit der Pause: immer wieder 11:30
 
 
+# Zeichen, deren Breite an die Remote-Seite geht (unbekannte Zeichen zählen dort so breit wie das breiteste hier)
+REMOTE_CHARS = "".join(chr(c) for c in range(32, 127)) + "\täöüÄÖÜßéèêëàáâçñíìîïóòôúùû–—„“”‚‘’«»…€§°·•×"
+
+
 def set_small_tabs(edit) -> None:
     """Tab-Abstand eines Textfelds auf die Breite des Tab-Zeichens in seiner Schrift setzen (wie auf der Folie)."""
     metrics = QFontMetricsF(edit.font())
@@ -285,6 +289,19 @@ class PausentimerPanel(QFrame):
     def max_chars(self) -> int:
         """Zeichen je Zeile; 0 = keine feste Zahl (mit Pausenfolie entscheidet die Breite ihres Textfelds)."""
         return self.MAX_CHARS if self._box is None else 0
+
+    def remote_fit(self):
+        """Maße des Ansagen-Felds der Folie für die Remote-Seite (dort wird die Schrift im selben Verhältnis skaliert),
+        ``None`` ohne Pausenfolie."""
+        box = self._box
+        if box is None:
+            return None
+        # Breite jedes Zeichens in der Schrift der Folie: Damit begrenzt die Remote-Seite die Zeilen genau wie das
+        # Programm, auch wenn die Schrift auf dem Handy fehlt.
+        chars = {ch: round(box.metrics.horizontalAdvance(ch), 2) for ch in REMOTE_CHARS}
+        return {"width": round(box.width, 2), "px": box.font.pixelSize(), "line": round(box.line_height, 2),
+                "family": box.font.family(), "bold": box.font.bold(), "italic": box.font.italic(),
+                "chars": chars, "other": max(chars.values())}
 
     def fit_text(self, text: str) -> str:
         """Text auf das kürzen, was ins Ansagen-Feld passt (Zeilen und Breite wie beim Tippen im Programm)."""

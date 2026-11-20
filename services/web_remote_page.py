@@ -37,7 +37,7 @@ HTML = """<!doctype html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=420, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="__CARD_BG__">
 <title>LiedManager – Fernsteuerung</title>
 <meta name="application-name" content="LiedManager">
@@ -133,6 +133,7 @@ HTML = """<!doctype html>
       </div>
       <textarea id="lines" rows="11" cols="50" wrap="off" spellcheck="false" hidden placeholder="Ansagen" aria-label="Ansagen"
                 title="Ansagen für die Pausenfolie – eine Zeile pro Ansage"></textarea>
+      <p id="pauseOffline" class="muted" hidden></p>
     </section>
   </section>
 
@@ -224,17 +225,17 @@ CSS = """:root {
   --panel-hover: linear-gradient(180deg, var(--hover-top), var(--hover-bottom));
 }
 * { box-sizing: border-box; }
-html { background: var(--bg); overflow-x: hidden; overscroll-behavior: none; touch-action: pan-y; }
+html { background: var(--bg); overflow-x: hidden; overscroll-behavior: none; touch-action: manipulation; }
 body {
   margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); font-size: var(--fs);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  -webkit-text-size-adjust: 100%; overflow-x: hidden; overscroll-behavior: none; touch-action: pan-y;
+  -webkit-text-size-adjust: 100%; overflow-x: hidden; overscroll-behavior: none; touch-action: manipulation;
   -webkit-user-select: none; user-select: none;
 }
 input, textarea { -webkit-user-select: text; user-select: text; }
 [hidden] { display: none !important; }
 svg { width: 1em; height: 1em; display: block; flex: none; }
-.screen { width: 420px; margin: 0 auto; padding: 16px 24px 40px; }
+.screen { width: 100%; max-width: 560px; margin: 0 auto; padding: 16px clamp(12px, 5vw, 24px) 40px; }   /* passt sich der Bildschirmbreite an */
 h1 { font-family: var(--serif); font-weight: 600; font-size: 24px; margin: 0; letter-spacing: .2px; }
 .muted { color: var(--muted); font-size: var(--fs-small); margin: 6px 0; }
 .caption { font-size: var(--fs-small); font-weight: 500; color: var(--text-2); margin: 0 0 8px; display: block; }
@@ -258,11 +259,13 @@ input[type=search] { -webkit-appearance: none; appearance: none; padding-left: 4
 input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; }
 input.small { height: 32px; padding: 0 10px; background: var(--bg); }
 textarea {
-  /* genau 50 Zeichen breit und 11 Zeilen hoch (Schrift mit fester Breite), ohne Bildlauf */
-  width: calc(50ch + 26px); height: 238px; padding: 8px 12px; resize: none; overflow: hidden; white-space: pre; overflow-wrap: normal;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace; font-size: 11px; line-height: 20px;
-  color: var(--text-2); letter-spacing: 0;
+  /* volle Breite; Schrift, Zeilenhöhe und Höhe setzt layoutLines() wie im Programm: eine volle Zeile der Folie
+     reicht genau bis zum rechten Rand, alle erlaubten Zeilen passen ohne Bildlauf */
+  width: 100%; height: 238px; padding: 8px 12px; resize: none; overflow-x: auto; overflow-y: hidden; white-space: pre;
+  overflow-wrap: normal; font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+  font-size: 11px; line-height: 20px; color: var(--text-2); letter-spacing: 0;
 }
+textarea.toowide, textarea.full { border-color: #E5503A; }
 input[type=time] { color-scheme: dark; }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:hover, textarea:hover { border-color: var(--accent-border); }
@@ -605,7 +608,7 @@ JS = r"""(function () {
       if (!reportsLoaded) { reportsLoaded = true; refreshReports(); }
     }).catch(function (err) {
       var offline = err.status === undefined || err.status === 503 || err.status === 504;
-      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); }
+      if (offline && err.message !== 'Bitte anmelden.') { setConn(false); refreshQueue(); loadOfflinePause(); }
     });
   }
   /* Bilder, die hochgeladen wurden, während das Programm nicht lief, warten auf dem Server */
@@ -637,6 +640,24 @@ JS = r"""(function () {
     request('POST', '/api/reports_clear', {}).then(function () { renderReports([]); })
       .catch(function (err) { toast(err.message, true); });
   });
+  /* Programm aus: Ansagen trotzdem bearbeiten – sie werden auf dem Server vorgemerkt und beim nächsten Start übernommen */
+  var offlinePauseAt = 0;
+  function loadOfflinePause() {
+    if (Date.now() - offlinePauseAt < 5000) { return; }
+    offlinePauseAt = Date.now();
+    request('GET', '/api/pause').then(function (r) {
+      var last = r.last || {};
+      if (last.max_lines) { maxLines = last.max_lines; maxChars = last.max_chars || 0; pauseFit = last.fit || null; }
+      var src = r.pending || last;
+      if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = (src.lines || []).join('\n'); lastFit = $('lines').value; }
+      if (src.end && document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = src.end; }
+      $('pauseOffline').textContent = r.pending
+        ? 'Programm aus – die Änderungen sind vorgemerkt und werden beim nächsten Start übernommen.'
+        : 'Programm aus – Änderungen werden vorgemerkt und beim nächsten Start übernommen.';
+      $('pauseOffline').hidden = false;
+      layoutLines();
+    }).catch(function () {});
+  }
   function refreshQueue() {
     return request('GET', '/api/inbox').then(function (r) { showQueue(r.pending || 0); }).catch(function () {});
   }
@@ -864,17 +885,83 @@ JS = r"""(function () {
   });
 
   var pauseOpen = false;
-  var maxLines = 11, maxChars = 50;
+  var maxLines = 11, maxChars = 50, pauseFit = null;
+  var MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace';
+  var measureCtx = null;
+  function fitFont(px) {
+    return (pauseFit.italic ? 'italic ' : '') + (pauseFit.bold ? '700 ' : '400 ') + px + 'px "' + pauseFit.family + '", serif';
+  }
+  /* Ansagen-Feld wie im Programm: Mit Pausenfolie wird deren Schrift so skaliert, dass eine volle Zeile der Folie genau
+     bis zum rechten Rand reicht; die Höhe reicht genau für alle erlaubten Zeilen. Ohne Folie: maxChars Zeichen breit. */
+  function layoutLines() {
+    var box = $('lines');
+    if (box.hidden) { return; }
+    var inner = box.clientWidth - 26;
+    if (inner <= 0) { return; }
+    measureCtx = measureCtx || document.createElement('canvas').getContext('2d');
+    var lines = box.value.split('\n');
+    var size, lineRatio, fontAt;
+    if (pauseFit && pauseFit.width > 0) {
+      size = pauseFit.px * inner / pauseFit.width;          // volle Zeile der Folie = volle Feldbreite (wie im Programm)
+      lineRatio = pauseFit.line > 0 ? pauseFit.line / pauseFit.px : 1.25;
+      fontAt = function (px) { return fitFont(px.toFixed(2)); };
+    } else {
+      size = inner / (Math.max(10, maxChars || 50) * 0.6);   // ohne Folie: maxChars Zeichen breit
+      lineRatio = 1.5;
+      fontAt = function (px) { return px.toFixed(2) + 'px ' + MONO; };
+    }
+    // Nie etwas verdecken: Ist eine Zeile breiter (z. B. noch nicht gekürzt), Schrift so weit verkleinern, dass sie passt
+    measureCtx.font = fontAt(size);
+    var widest = lines.reduce(function (w, l) { return Math.max(w, measureCtx.measureText(l).width); }, 0);
+    if (widest > inner) { size = size * inner / widest; }
+    box.style.font = fontAt(size);
+    var lineH = Math.ceil(size * lineRatio);
+    box.style.lineHeight = lineH + 'px';
+    box.style.height = (Math.max(maxLines, lines.length) * lineH + 16 + 2 + 8) + 'px';
+    markTooWide();
+  }
+  /* Zeile breiter als das Feld der Folie (gemessen mit derselben Schrift): roter Rand. Gekürzt wird beim Speichern
+     im Programm – mit genau denselben Maßen wie dort. */
+  function markTooWide() {
+    var box = $('lines');
+    var tooWide = false;
+    if (pauseFit && pauseFit.chars) {
+      tooWide = box.value.split('\n').some(function (l) { return lineWidth(l) > pauseFit.width + 0.01; });
+    }
+    box.classList.toggle('toowide', tooWide);
+  }
+  /* Breite einer Zeile in der Schrift der Folie – aus den Zeichenbreiten, die das Programm mitschickt (genau wie dort) */
+  function lineWidth(l) {
+    var w = 0;
+    for (var i = 0; i < l.length; i++) {
+      var c = pauseFit.chars[l[i]];
+      w += c === undefined ? pauseFit.other : c;
+    }
+    return w;
+  }
+  function fits(text) {
+    var lines = text.split('\n');
+    if (lines.length > maxLines) { return false; }
+    if (pauseFit && pauseFit.chars) { return lines.every(function (l) { return lineWidth(l) <= pauseFit.width + 0.01; }); }
+    if (maxChars > 0) { return lines.every(function (l) { return l.length <= maxChars; }); }
+    return true;
+  }
+  /* Wie im Programm: Passt die Eingabe nicht mehr ins Feld der Folie (Zeilen oder Breite), wird sie zurückgenommen */
+  var lastFit = '';
   function clampLines() {
     var box = $('lines');
-    var lines = box.value.split('\n').slice(0, maxLines).map(function (l) { return maxChars > 0 ? l.slice(0, maxChars) : l; });
-    var text = lines.join('\n');
-    if (text !== box.value) { box.value = text; }
+    if (fits(box.value)) { lastFit = box.value; return; }
+    var pos = box.selectionStart - (box.value.length - lastFit.length);
+    box.value = fits(lastFit) ? lastFit : '';
+    box.setSelectionRange(Math.max(0, pos), Math.max(0, pos));
+    box.classList.add('full');
+    setTimeout(function () { box.classList.remove('full'); }, 400);
   }
   function setPauseOpen(open) {
     pauseOpen = open;
     $('lines').hidden = !open;
     $('pauseChevron').classList.toggle('open', open);
+    if (open) { layoutLines(); }
   }
   function renderPause(p) {
     $('pauseBtn').classList.toggle('running', p.running);
@@ -884,10 +971,13 @@ JS = r"""(function () {
     title.classList.toggle('run', p.running);
     maxLines = p.max_lines;
     maxChars = p.max_chars;
+    pauseFit = p.fit || null;
+    $('pauseOffline').hidden = true;
     $('lines').title = 'Ansagen für die Pausenfolie – eine Zeile pro Ansage (höchstens ' + p.max_lines + ' Zeilen' +
       (p.max_chars > 0 ? ' mit je ' + p.max_chars + ' Zeichen' : '; zu lange Zeilen werden passend gekürzt') + ')';
-    if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = p.lines.join('\n'); }
+    if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = p.lines.join('\n'); lastFit = $('lines').value; }
     if (document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = p.end; }
+    layoutLines();
   }
 
   /* ---------------- Suche ---------------- */
@@ -1037,11 +1127,12 @@ JS = r"""(function () {
   function sendPauseSettings() {
     return act('pause_set', { lines: $('lines').value.split('\n'), end: $('endTime').value }, true).then(function (r) {
       if (r && r.shortened) { toast('Zu lang für die Pausenfolie – passend gekürzt', true); }
+      if (r && r.queued) { offlinePauseAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
       delete $('lines').dataset.dirty;
       delete $('endTime').dataset.dirty;
     });
   }
-  on('lines', 'input', function () { clampLines(); $('lines').dataset.dirty = '1'; });
+  on('lines', 'input', function () { clampLines(); layoutLines(); $('lines').dataset.dirty = '1'; });
   on('endTime', 'input', function () { $('endTime').dataset.dirty = '1'; });
   on('lines', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
   on('endTime', 'change', function () { sendPauseSettings().catch(function (err) { toast(err.message, true); }); });
@@ -1052,17 +1143,9 @@ JS = r"""(function () {
   });
   on('syncBtn', 'click', function () { actQuiet('sync_now'); });
 
-  // Kein Zoomen und kein seitliches Verschieben (iOS ignoriert user-scalable=no)
-  ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (name) {
-    document.addEventListener(name, function (e) { e.preventDefault(); });
-  });
-  document.addEventListener('touchmove', function (e) { if (e.touches.length > 1) { e.preventDefault(); } }, { passive: false });
-  var lastTouch = 0;
-  document.addEventListener('touchend', function (e) {
-    var now = Date.now();
-    if (now - lastTouch < 350) { e.preventDefault(); }
-    lastTouch = now;
-  }, { passive: false });
+  // Mit zwei Fingern zoomen ist erlaubt; Doppeltippen zoomt nicht (touch-action: manipulation), damit schnelles
+  // Tippen auf Knöpfe nicht versehentlich vergrößert.
+  window.addEventListener('resize', layoutLines);
 
   if (token) { showApp(); } else { showLogin(); }
 })();

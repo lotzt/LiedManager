@@ -153,6 +153,7 @@ class RelayClient:
         self._status = ""
         self._connected = False
         self._inbox_busy = False
+        self._pause_busy = False
         self._lock = threading.Lock()
 
     @property
@@ -240,6 +241,9 @@ class RelayClient:
                 if reply.get("inbox") and not self._inbox_busy and self._pool is not None:
                     self._inbox_busy = True
                     self._pool.submit(self._drain_inbox)
+                if reply.get("pause") and not self._pause_busy and self._pool is not None:
+                    self._pause_busy = True
+                    self._pool.submit(self._take_pause)
                 for job in reply.get("jobs") or []:
                     pool = self._pool
                     if pool is not None and isinstance(job, dict):
@@ -284,6 +288,29 @@ class RelayClient:
             log.exception("Website-Steuerung: Bilder-Abholung fehlgeschlagen")
         finally:
             self._inbox_busy = False
+
+    # ------------------------------------------------------------------
+    # Vorgemerkte Ansagen (auf der Website bearbeitet, während das Programm nicht lief)
+    # ------------------------------------------------------------------
+    def _take_pause(self) -> None:
+        try:
+            api = RemoteApi(self.url, self.token, INBOX_TIMEOUT, self.device)
+            item = api.call("pause_get").get("item")
+            if not isinstance(item, dict):
+                return
+            try:
+                args = json.loads(item.get("body") or "{}")
+                if isinstance(args, dict):
+                    self.backend.action("pause_set", args)      # wie eine Änderung von der Website bei laufendem Programm
+            except Exception:
+                log.exception("Website-Steuerung: vorgemerkte Ansagen konnten nicht übernommen werden")
+            api.call("pause_done", created=item.get("created"))   # auch bei Fehlern: nicht endlos wiederholen
+        except SyncError as exc:
+            log.debug("Website-Steuerung: Ansagen-Abholung gestoppt (%s)", exc)
+        except Exception:
+            log.exception("Website-Steuerung: Ansagen-Abholung fehlgeschlagen")
+        finally:
+            self._pause_busy = False
 
     # ------------------------------------------------------------------
     # Zustand senden

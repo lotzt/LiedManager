@@ -57,9 +57,10 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 **Server einrichten (einmalig):**
 
 1. Beim Webhoster eine MySQL-Datenbank anlegen (bei All-Inkl: KAS → *Datenbanken*; Name, Benutzer, Passwort notieren).
-2. `server/sync.php` öffnen und oben `TOKEN` (selbst ausgedachtes, langes Zufallspasswort), `DB_NAME`, `DB_USER`
-   und `DB_PASS` eintragen.
-3. Die Datei per FTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/sync/sync.php`
+2. `server/sync-zugang.beispiel.php` in `sync-zugang.php` umbenennen und dort `TOKEN` (selbst ausgedachtes, langes
+   Zufallspasswort), `DB_NAME`, `DB_USER` und `DB_PASS` eintragen. Diese Datei kommt neben `sync.php` auf den Server
+   und wird bei Updates nie überschrieben.
+3. Beide Dateien per FTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/sync/sync.php`
    (die Domain braucht SSL, also `https://`). Die Tabellen legt das Skript beim ersten Aufruf selbst an.
 
 **Auf jedem Gerät:**
@@ -103,9 +104,9 @@ nicht, zeigt die Seite „getrennt“.
 **Server einrichten (einmalig):**
 
 1. Beim Webhoster eine MySQL-Datenbank anlegen oder die vom Abgleich mitbenutzen (die Tabellen heißen anders: `lm_rm_…`).
-2. `server/remote.php` öffnen und oben `TOKEN` (langes Zufallspasswort, kommt auch ins Programm), `PIN` (Passwort für den
-   Browser, mindestens 8 Zeichen) sowie `DB_NAME`, `DB_USER`, `DB_PASS` eintragen.
-3. Per WebFTP in einen Ordner der Domain legen, z. B. `technik.deine-domain.de/steuerung/remote.php` (mit SSL). Zum Prüfen
+2. `server/remote-zugang.beispiel.php` in `remote-zugang.php` umbenennen und dort `TOKEN` (langes Zufallspasswort, kommt
+   auch ins Programm), `PIN` (Passwort für den Browser, mindestens 8 Zeichen) sowie `DB_NAME`, `DB_USER`, `DB_PASS` eintragen.
+3. `remote.php` und `remote-zugang.php` per FTP in denselben Ordner der Domain legen, z. B. `technik.deine-domain.de/steuerung/remote.php` (mit SSL). Zum Prüfen
    `…/remote.php?check` öffnen: Dort steht, ob Zugangsdaten und Datenbank in Ordnung sind – und, falls nicht, welcher Wert
    (z. B. „PIN ist zu kurz“) noch nicht stimmt. Die Seite zeigt auch, wann die Datei auf dem Server zuletzt geändert wurde
    (so erkennst du, ob wirklich die neue Datei hochgeladen wurde). Die Tabellen legt die Datei beim
@@ -113,7 +114,11 @@ nicht, zeigt die Seite „getrennt“.
 
 **Im Programm:** *Einstellungen → Remote*: Haken setzen, Adresse von `remote.php` und
 dasselbe Token eintragen. Die Statuszeile zeigt „Verbunden – im Browser öffnen: …“. Diese Adresse öffnest du auf dem Handy
-und meldest dich mit der PIN aus `remote.php` an.
+und meldest dich mit der PIN aus `remote-zugang.php` an.
+
+**Updates:** Eine neue `remote.php` oder `sync.php` einfach hochladen und die alte ersetzen – die Zugangsdaten in
+`remote-zugang.php` bzw. `sync-zugang.php` bleiben unberührt. (Ältere Einrichtungen mit den Daten direkt in der Datei
+funktionieren weiter; beim nächsten Update am besten auf die Zugangsdatei umstellen.)
 
 Sicherheit: HTTPS ist Pflicht (ohne verweigern Programm und Seite den Dienst). Angemeldet wird auf der Website selbst; nur
 angemeldete Browser erreichen das Programm. Falsche PINs sperren die Adresse (nach 5 Versuchen 30 s, verdoppelt bis 10 min), alle
@@ -133,7 +138,7 @@ Server: `server/remote_template.php`.
 Einstellungen → Mischpult → „Behringer X AIR“: Adresse des Pults eintragen (im X AIR Edit unter Setup → Network, am besten feste
 IP). LiedManager spricht das Pult per OSC/UDP (Port 10024) an und muss im selben Netzwerk stehen; das Pult selbst braucht keinen Internetzugang.
 Die Web-Fernsteuerung zeigt dann im Reiter „Kamera“ die Kanäle 1–8 mit Namen, Regler (lauter/leiser, Anzeige in dB) und Mute-Knopf.
-Neue `remote.php` hochladen (Zugangsdaten oben erneut eintragen). Logik: `services/xair.py`. Nicht an einem echten Pult getestet –
+Neue `remote.php` hochladen. Logik: `services/xair.py`. Nicht an einem echten Pult getestet –
 erste Versuche bitte bei leiser Anlage.
 
 Der Knopf „Alles stumm“ unter den acht Reglern schaltet alle Kanäle auf einmal stumm.
@@ -149,7 +154,7 @@ Bei einem unerwarteten Fehler schickt das Programm (wenn die Remote-Steuerung ei
 Fehlertext an `remote.php`. Du siehst es im Browser unter „Mehr“ → „Gemeldete Probleme“. Gleiche Fehler werden nur gezählt,
 höchstens 10 Meldungen pro Stunde, ohne Internet wartet die Meldung bis zum nächsten Start. Pfade im Benutzerordner werden gekürzt,
 es gehen keine Liedtexte, Dateien oder Zugangsdaten raus. Abschalten: Einstellungen → Remote → „Programmfehler automatisch melden“.
-**Wichtig:** dazu muss die neue `remote.php` auf den Server (mit deinen Zugangsdaten).
+**Wichtig:** dazu muss die neue `remote.php` auf den Server.
 
 ### Bilder von zu Hause hochladen (auch wenn das Programm nicht läuft)
 
@@ -165,7 +170,7 @@ die selbst nicht eingeschaltet sein muss). Jede gespeicherte Aufnahme wird in St
 `remote.php` geladen; bricht die Verbindung ab, wird sie später fortgesetzt (Liste: `aufnahmen_hochladen.json` im
 Datenordner). Der Ordner ist nicht als Dateiliste einsehbar, die Dateien sind aber über ihre Adresse erreichbar –
 wer das nicht möchte, sollte den Ordner beim Webhoster mit einem Passwort schützen. Nach dem Aktualisieren der Programmdatei
-`remote.php` neu hochladen (Zugangsdaten oben erneut eintragen).
+`remote.php` neu hochladen.
 
 **Direkt in die WordPress-Mediathek:** Einstellungen → Audio → Aufnahmen → „Automatisch in die WordPress-Mediathek hochladen“. Eintragen: Adresse der
 WordPress-Seite, Benutzername und ein *Anwendungspasswort* (WordPress → Benutzer → Profil → Anwendungspasswörter, Benutzerrolle
