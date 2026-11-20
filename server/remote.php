@@ -1521,12 +1521,13 @@ function create_inbox(PDO $db): void {
 }
 
 function create_reports(PDO $db): void {
+    // `system` in Backticks: ab MySQL 8 ist „system“ ein reserviertes Wort
     $db->exec('CREATE TABLE IF NOT EXISTS lm_rm_reports (
         id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
         created INT NOT NULL,
         fp      CHAR(16) NOT NULL,
         version VARCHAR(40) NOT NULL,
-        system  VARCHAR(80) NOT NULL,
+        `system` VARCHAR(80) NOT NULL,
         title   VARCHAR(300) NOT NULL,
         detail  TEXT NULL,
         n       INT NOT NULL DEFAULT 1,
@@ -1545,7 +1546,7 @@ function store_report(PDO $db, array $in): void {
     $update = $db->prepare('UPDATE lm_rm_reports SET n = n + 1, created = ? WHERE fp = ? AND created > ?');
     $update->execute([time(), $fp, time() - 86400]);
     if ($update->rowCount() === 0) {
-        $db->prepare('INSERT INTO lm_rm_reports (created, fp, version, system, title, detail) VALUES (?, ?, ?, ?, ?, ?)')
+        $db->prepare('INSERT INTO lm_rm_reports (created, fp, version, `system`, title, detail) VALUES (?, ?, ?, ?, ?, ?)')
             ->execute([time(), $fp, substr((string)($in['version'] ?? ''), 0, 40), substr((string)($in['system'] ?? ''), 0, 80),
                 mb_substr((string)($in['title'] ?? ''), 0, 300), mb_substr((string)($in['detail'] ?? ''), 0, 6000)]);
     }
@@ -1910,7 +1911,7 @@ function browser_api(string $api): void {
         json_out(['ok' => true, 'queued' => true], 202);
     }
     if ($api === 'reports' && $method === 'GET') {
-        $rows = $db->query('SELECT id, created, version, system, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
+        $rows = $db->query('SELECT id, created, version, `system`, title, detail, n FROM lm_rm_reports ORDER BY id DESC LIMIT 30')
             ->fetchAll(PDO::FETCH_ASSOC);
         json_out(['reports' => $rows]);
     }
