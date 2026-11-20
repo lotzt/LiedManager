@@ -84,6 +84,8 @@ HTML = """<!doctype html>
     <span id="conn" class="chip" title="Verbindung zum Programm">verbunden</span>
     <span id="beamerChip" class="chip" title="Was gerade auf dem Beamer zu sehen ist">Beamer: leer</span>
   </div>
+  <p id="offlineNote" class="offlinenote" hidden>Programm aus – <b>Ansagen und Endzeit</b> werden vorgemerkt und beim
+    nächsten Start übernommen. Alles andere geht erst, wenn das Programm läuft.</p>
 
   <section id="tab-song" class="tabpage">
     <ul id="results" class="list" hidden></ul>
@@ -338,6 +340,11 @@ button:disabled { color: var(--muted); border-color: var(--border) !important; c
 }
 select.chip { appearance: none; -webkit-appearance: none; cursor: pointer; font-family: inherit; }
 .chip.bad { color: var(--rec); border-color: var(--rec); }
+/* Programm aus: nur was vorgemerkt werden kann bleibt bedienbar (Ansagen, Endzeit, Bilder hochladen) */
+.offlinenote { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--rec); border-radius: 12px;
+  color: var(--text-2); font-size: var(--fs-small); line-height: 1.4; }
+body.offline #q, body.offline #gongBtn, body.offline #escBtn, body.offline #songArea, body.offline #results,
+body.offline #pauseBtn, body.offline #tab-camera, body.offline #tab-images { opacity: .4; pointer-events: none; }
 .chip.live { color: var(--accent-light); border-color: var(--accent-border); }
 
 /* Lied */
@@ -651,10 +658,8 @@ JS = r"""(function () {
       var src = r.pending || last;
       if (document.activeElement !== $('lines') && !$('lines').dataset.dirty) { $('lines').value = (src.lines || []).join('\n'); lastFit = $('lines').value; }
       if (src.end && document.activeElement !== $('endTime') && !$('endTime').dataset.dirty) { $('endTime').value = src.end; }
-      $('pauseOffline').textContent = r.pending
-        ? 'Programm aus – die Änderungen sind vorgemerkt und werden beim nächsten Start übernommen.'
-        : 'Programm aus – Änderungen werden vorgemerkt und beim nächsten Start übernommen.';
-      $('pauseOffline').hidden = false;
+      $('pauseOffline').textContent = 'Deine Änderungen sind vorgemerkt.';
+      $('pauseOffline').hidden = !r.pending;
       layoutLines();
     }).catch(function () {});
   }
@@ -665,6 +670,8 @@ JS = r"""(function () {
     var chip = $('conn');
     chip.textContent = ok ? 'verbunden' : 'getrennt';
     chip.className = 'chip' + (ok ? '' : ' bad');
+    document.body.classList.toggle('offline', !ok);
+    $('offlineNote').hidden = ok;
   }
 
   function render(s) {

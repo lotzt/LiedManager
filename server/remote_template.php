@@ -46,8 +46,6 @@ const MAX_UPLOAD     = 8388608;    // größtes Bild vom Handy (8 MB; als Text g
 const MAX_APP_BODY   = 4194304;    // größte Meldung vom Programm
 const MAX_FAILURES   = 5;          // falsche PINs je Adresse, dann Sperre (30 s, verdoppelt sich bis 10 min)
 const GLOBAL_FAILURES = 50;        // falsche PINs von allen Adressen in 10 Minuten, dann 5 Minuten Pause für alle
-const INBOX_MAX_FILES = 40;        // so viele Bilder werden für das Programm vorgemerkt, solange es nicht läuft
-const INBOX_MAX_BYTES = 50331648;  // … höchstens 48 MB zusammen
 const INBOX_KEEP     = 2592000;    // vorgemerkte Bilder werden nach 30 Tagen verworfen
 const REC_DIR        = 'aufnahmen'; // Ordner neben remote.php für die Aufnahmen aus dem Programm
 const REC_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg'];
@@ -354,19 +352,6 @@ function inbox_pending(PDO $db): int {
     return (int)$q->fetchColumn();
 }
 
-/** Bild vormerken, solange das Programm nicht läuft; es wird beim nächsten Verbinden abgeholt. */
-function queue_upload(PDO $db, string $name, string $data): void {
-    $db->prepare('DELETE FROM lm_rm_inbox WHERE created < ?')->execute([time() - INBOX_KEEP]);
-    $row = $db->query('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS bytes FROM lm_rm_inbox')
-        ->fetch(PDO::FETCH_ASSOC);
-    if ((int)$row['n'] >= INBOX_MAX_FILES || (int)$row['bytes'] + strlen($data) > INBOX_MAX_BYTES) {
-        fail(507, 'Der Zwischenspeicher auf dem Server ist voll. Bitte zuerst das Programm starten, '
-            . 'damit die vorgemerkten Bilder abgeholt werden.');
-    }
-    $db->prepare('INSERT INTO lm_rm_inbox (created, name, body, dev) VALUES (?, ?, ?, ?)')->execute([time(), $name, $data, cur_dev()]);
-    json_out(['queued' => true, 'added' => 0, 'failed' => 0, 'pending' => inbox_pending($db)], 202);
-}
-
 function app_alive(PDO $db): bool {
     $q = $db->prepare('SELECT alive FROM lm_rm_devices WHERE name = ?');
     $q->execute([cur_dev()]);
@@ -661,12 +646,13 @@ function browser_api(string $api): void {
         if (!$ok || strlen($name) > 80) {
             fail(415, 'Nur Bilder (PNG, JPG, GIF, BMP, WebP) sind erlaubt.');
         }
+        if (!app_alive($db)) {
+            // Bilder werden nicht vorgemerkt (nur Lieder und Pausentimer) – erst hochladen, wenn das Programm läuft
+            fail(503, 'Das Programm läuft nicht. Bilder lassen sich nur hochladen, solange LiedManager läuft.');
+        }
         $data = read_body(MAX_UPLOAD);
         if ($data === '') {
             fail(400, 'Die Datei ist leer.');
-        }
-        if (!app_alive($db)) {
-            queue_upload($db, $name, $data);      // Programm läuft nicht: vormerken statt ablehnen
         }
         run_job($db, 'upload', $name, base64_encode($data), UPLOAD_WAIT);
     }

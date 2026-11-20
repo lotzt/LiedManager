@@ -47,3 +47,38 @@ jobs:
       - name: Remote-Seite aktuell?
         shell: bash
         run: python tools/build_remote_site.py --check
+
+  # remote.php und sync.php mit echtem PHP und echter MySQL-Datenbank (wie beim Webhoster)
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: liedmanager
+          MYSQL_USER: lm
+          MYSQL_PASSWORD: lm-test-pw
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo_mysql
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - name: PHP-Syntax
+        run: for f in server/*.php; do php -l "$f"; done
+      - name: Server-Tests
+        env:
+          LM_TEST_MYSQL_HOST: 127.0.0.1
+          LM_TEST_MYSQL_DB: liedmanager
+          LM_TEST_MYSQL_USER: lm
+          LM_TEST_MYSQL_PASS: lm-test-pw
+        run: python -m pytest -v tests/test_server_php.py

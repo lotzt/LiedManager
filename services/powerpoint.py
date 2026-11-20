@@ -90,7 +90,7 @@ def write_announcements(pptx_path: str, lines):
                 try:
                     run.font.color.rgb = color.rgb
                 except Exception:
-                    pass
+                    log.debug("PowerPoint: Schriftfarbe nicht übernommen", exc_info=True)
             if bold is not None:
                 run.font.bold = bold
             if italic is not None:
