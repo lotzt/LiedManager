@@ -560,7 +560,17 @@ function offline_search(PDO $db, string $raw): array {
         }
         $prefix = $m[1] !== '' ? $m[1] : 'p';
         $number = (int)$m[2];
-        $song = $byKey[$prefix . sprintf('%03d', $number)] ?? $byKey[$prefix . $number] ?? null;
+        $song = null;
+        if ($m[1] === '') {
+            // Ohne Buchstabe zuerst die reine Nummer ansehen: Ist sie ein Verweis (z. B. 512 -> p102), gilt das Ziel.
+            $plain = $byKey[sprintf('%03d', $number)] ?? $byKey[(string)$number] ?? null;
+            if ($plain !== null && $plain['alias'] !== '' && isset($byKey[$plain['alias']])) {
+                $song = $byKey[$plain['alias']];
+            }
+        }
+        if ($song === null) {
+            $song = $byKey[$prefix . sprintf('%03d', $number)] ?? $byKey[$prefix . $number] ?? null;
+        }
         if ($song === null) {
             foreach ($rows as $row) {
                 if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === $number) {

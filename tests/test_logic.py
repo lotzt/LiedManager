@@ -47,3 +47,32 @@ def test_beispiel_datenbank(app):
     full = db.get_song_full_data(found[0].rowid)
     assert full[7], "Lied ohne Beamer-Bild (bild1)"
     assert db.search_songs("100"), "Verweis-Nummer 100 muss gefunden werden"
+
+
+def test_nummer_ohne_praefix_folgt_verweis(tmp):
+    """Eingabe ohne Buchstabe: hat die reine Nummer einen Verweis (512 -> p102), gilt das Ziel – auch wenn es p512 gibt.
+    Ohne Verweis bleibt es bei 'p' + Nummer."""
+    import os
+    import sqlite3
+
+    from database import DatabaseManager
+    path = os.path.join(str(tmp), "verweis.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE Data (nummer TEXT, alias TEXT, titel TEXT, lyrics TEXT, audio1 BLOB, audio2 BLOB, "
+                "bild1 BLOB, bild2 BLOB, bild3 BLOB, bild4 BLOB)")
+    for nummer, alias, titel, lyrics in (
+            ("p102", None, "Lied 102", "a"), ("512", "p102", "Verweis 512", None), ("p512", None, "Lied p512", "b"),
+            ("p012", None, "Lied p012", "c"), ("12", None, "Lied 12", "d"),
+            ("700", "p999", "Verweis ins Leere", "e"), ("p700", None, "Lied p700", "f")):
+        con.execute("INSERT INTO Data (nummer, alias, titel, lyrics) VALUES (?, ?, ?, ?)", (nummer, alias, titel, lyrics))
+    con.commit()
+    con.close()
+    db = DatabaseManager(path)
+
+    def numbers(query):
+        return [song.nummer for song in db.search_songs(query)]
+
+    assert numbers("512") == ["p102"], "512 ist ein Verweis auf p102"
+    assert numbers("p512") == ["p512"], "mit Buchstabe gilt genau diese Nummer"
+    assert numbers("12") == ["p012"], "ohne Verweis bleibt es bei p + Nummer"
+    assert numbers("700") == ["p700"], "Verweis ohne Ziel: weiter wie bisher"

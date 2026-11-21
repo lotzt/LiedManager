@@ -210,6 +210,15 @@ class DatabaseManager:
         prefix = match.group(1) or "p"  # ohne Buchstabe: 'p' annehmen
         number = int(match.group(2))
 
+        if not match.group(1):
+            # Ohne Buchstabe zuerst die reine Nummer ansehen: Ist sie ein Verweis (z. B. 512 -> p102), gilt das Ziel.
+            # Nur ohne Verweis wird – wie bisher – 'p' + Nummer angenommen.
+            plain = self._by_number.get(f"{number:03d}") or self._by_number.get(str(number))
+            if plain is not None and plain.has_alias:
+                target = self._by_number.get(str(plain.summary.alias).lower().replace(" ", ""))
+                if target is not None:
+                    return [target]
+
         song = (self._by_number.get(f"{prefix}{number:03d}")
                 or self._by_number.get(f"{prefix}{number}"))
         if song is None:
