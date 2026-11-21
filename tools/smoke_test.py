@@ -940,7 +940,7 @@ def main() -> int:
     _songlog_dir.mkdir()
     _songlog.songlog_dir = lambda: _songlog_dir
 
-    from PyQt6.QtCore import QAbstractAnimation, QSettings
+    from PyQt6.QtCore import QAbstractAnimation, QSettings, Qt
     from PyQt6.QtWidgets import QApplication
 
     QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, str(tmp))
@@ -995,6 +995,34 @@ def main() -> int:
     settle()
     assert window.current_song_summary is not None, "Lied 1 wurde nicht gefunden"
     window.grab().save(str(SHOTS / "02_lied_gewaehlt.png"))
+
+    # ---- Vorgemerkte Lieder: Symbol in der Suchzeile und eigenes Fenster ----------------------------
+    from services import songplan
+    from ui.songplan_dialog import SongPlanDialog
+    songplan.set_songs(["p002"])
+    window.refresh_plan_button()
+    assert "1" in window.plan_action.toolTip(), "Anzahl der vorgemerkten Lieder fehlt am Symbol"
+    plan_dialog = SongPlanDialog(window.db, window)
+    plan_dialog.show()
+    settle()
+    assert "Befiehl du deine Wege" in plan_dialog.list.item(0).text(), "Titel des vorgemerkten Liedes fehlt"
+    plan_dialog.edit.setPlainText("p002\np")
+    cursor = plan_dialog.edit.textCursor()
+    cursor.movePosition(cursor.MoveOperation.End)
+    plan_dialog.edit.setTextCursor(cursor)
+    settle()
+    numbers = [plan_dialog.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(plan_dialog.list.count())]
+    assert numbers[:2] == ["p001", "p002"], f"Buchstabe „p“ muss alle p-Nummern zeigen: {numbers}"
+    plan_dialog._pick(plan_dialog.list.item(0))
+    assert plan_dialog.edit.toPlainText() == "p002\np001", plan_dialog.edit.toPlainText()
+    plan_dialog.grab().save(str(SHOTS / "03b_vorgemerkte_lieder.png"))
+    plan_dialog.accept()
+    assert songplan.get() == ["p002", "p001"], songplan.get()
+    songplan.set_songs([])
+    window.refresh_plan_button()
+    window.search_input.setText("1")
+    window._on_search_return_pressed()
+    settle()
 
     window.pausentimer_panel.toggle()
     settle()
@@ -1698,6 +1726,13 @@ def main() -> int:
     again, _ = panel.add_paths([str(folder / "bild1.png")])
     assert again == 0, "Duplikat wurde nochmal aufgenommen"
 
+    # ✕ am Bild: die Fläche oben rechts gehört genau zu diesem Bild, der Rest des Bildes nicht
+    from PyQt6.QtCore import QPointF
+    from ui.images_panel import _ThumbDelegate
+    rect = panel.list.visualRect(panel.list.model().index(1, 0))
+    assert panel.list._delete_row_at(_ThumbDelegate.delete_rect(rect).center()) == 1, "✕ am zweiten Bild nicht getroffen"
+    assert panel.list._delete_row_at(QPointF(rect.center())) == -1, "Bildmitte darf nicht als ✕ zählen"
+
     window.open_gallery(1)
     settle()
     gallery = window.gallery_window
@@ -1755,8 +1790,9 @@ def main() -> int:
     settle()
     assert window.gallery_window is None, "Pausentimer muss die Galerie auf dem Beamer schließen"
 
-    panel.remove_selected()
-    assert panel.count() == 2
+    removed = panel.paths()[0]
+    panel.remove_row(0)                          # wie ein Klick auf das ✕ am ersten Bild
+    assert panel.count() == 2 and removed not in panel.paths(), "✕ hat nicht genau dieses Bild entfernt"
     panel.clear()
     settle()
     assert panel.count() == 0, "leere Ablage muss leer sein"

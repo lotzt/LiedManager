@@ -135,9 +135,11 @@ HTML = """<!doctype html>
       </div>
       <textarea id="planLines" class="plan" rows="6" spellcheck="false" autocapitalize="off" autocomplete="off" hidden
                 placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
-                title="Liednummern, eine pro Zeile"></textarea>
+                title="Liednummern, eine pro Zeile – ein einzelner Buchstabe zeigt alle Nummern damit"></textarea>
+      <ul id="planSuggest" class="list suggest" hidden></ul>
       <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
-        erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht.</p>
+        erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht. Ein einzelner Buchstabe (z. B. „p“)
+        zeigt alle Nummern damit zur Auswahl.</p>
     </section>
 
     <section id="pausePanel" class="pause">
@@ -190,6 +192,7 @@ HTML = """<!doctype html>
       <div id="thumbs" class="thumbs"></div>
       <p id="noImages" class="muted">Noch keine Bilder. Lade welche vom Handy hoch.</p>
       <p id="queueNote" class="muted" hidden></p>
+      <div id="queueThumbs" class="thumbs queued" hidden></div>
       <div class="row">
         <label class="pill filebtn" title="Bilder von diesem Gerät hinzufügen">Bilder hochladen
           <input id="upload" type="file" accept="image/*" multiple hidden>
@@ -454,6 +457,8 @@ input.timeedit { width: 84px; flex: none; text-align: center; padding: 0 8px; fo
   position: absolute; right: 5px; top: 5px; width: 26px; height: 26px; border-radius: 13px; line-height: 22px;
   color: var(--text-2); background: rgba(26,24,23,.82); border: 1px solid var(--accent-border); padding: 0;
 }
+.thumbs.queued { margin: 4px 0 12px; }
+.list.suggest { margin: 0 0 8px; max-height: 240px; overflow-y: auto; }
 .thumb .del:hover { color: var(--text); border-color: var(--accent); }
 .cam { display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 8px 0; }
 .cam + .cam { border-top: 1px solid var(--border); }
@@ -541,7 +546,7 @@ JS = r"""(function () {
         showLogin();
         throw new Error('Bitte anmelden.');
       }
-      if (res.ok && path.indexOf('/api/thumb/') === 0) { return res.blob(); }
+      if (res.ok && (path.indexOf('/api/thumb/') === 0 || path.indexOf('/api/inbox_img/') === 0)) { return res.blob(); }
       return res.json().catch(function () { return {}; }).then(function (data) {
         if (!res.ok) {
           var err = new Error(data.error || ('Fehler ' + res.status));
@@ -680,8 +685,40 @@ JS = r"""(function () {
       layoutLines();
     }).catch(function () {});
   }
+  var queueSig = '', queueUrls = [];
+  function renderQueue(items) {
+    var sig = JSON.stringify(items || []);
+    if (sig === queueSig) { return; }
+    queueSig = sig;
+    queueUrls.forEach(function (u) { URL.revokeObjectURL(u); });
+    queueUrls = [];
+    var box = $('queueThumbs');
+    box.textContent = '';
+    box.hidden = !(items && items.length);
+    (items || []).forEach(function (it) {
+      var tile = el('div', 'thumb');
+      tile.title = it.name + ' – vorgemerkt, kommt beim nächsten Programmstart';
+      var img = el('img');
+      img.alt = it.name;
+      tile.appendChild(img);
+      var del = el('button', 'del', '×');
+      del.type = 'button';
+      del.title = 'Dieses Bild nicht mehr vormerken';
+      del.dataset.qdel = String(it.id);
+      tile.appendChild(del);
+      box.appendChild(tile);
+      request('GET', '/api/inbox_img/' + it.id).then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        queueUrls.push(url);
+        img.src = url;
+      }).catch(function () {});
+    });
+  }
   function refreshQueue() {
-    return request('GET', '/api/inbox').then(function (r) { showQueue(r.pending || 0); }).catch(function () {});
+    return request('GET', '/api/inbox').then(function (r) {
+      showQueue(r.pending || 0);
+      renderQueue(r.items || []);
+    }).catch(function () {});
   }
   function setConn(ok) {
     var chip = $('conn');
@@ -989,6 +1026,7 @@ JS = r"""(function () {
     $('planLines').hidden = !open;
     $('planHint').hidden = !open;
     $('planChevron').classList.toggle('open', open);
+    if (!open) { hidePlanSuggest(); }
   }
   function planSongs() {
     return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
@@ -1009,6 +1047,52 @@ JS = r"""(function () {
       if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
       delete $('planLines').dataset.dirty;
     });
+  }
+
+  /* Vormerkliste: ein einzelner Buchstabe in der aktuellen Zeile zeigt alle Nummern damit zur Auswahl */
+  var planSuggestSeq = 0, planSuggestTimer = null;
+  function planCurrentLine() {
+    var ta = $('planLines'), pos = ta.selectionStart || 0, v = ta.value;
+    var start = v.lastIndexOf('\n', pos - 1) + 1, end = v.indexOf('\n', pos);
+    if (end < 0) { end = v.length; }
+    return { start: start, end: end, text: v.slice(start, end).trim() };
+  }
+  function hidePlanSuggest() {
+    planSuggestSeq += 1;
+    $('planSuggest').hidden = true;
+    $('planSuggest').textContent = '';
+  }
+  function planSuggest() {
+    var line = planCurrentLine(), box = $('planSuggest');
+    if (!/^[a-zA-Z]$/.test(line.text)) { hidePlanSuggest(); return; }
+    var seq = ++planSuggestSeq;
+    request('POST', '/api/search', { text: line.text }).then(function (data) {
+      if (seq !== planSuggestSeq) { return; }
+      box.textContent = '';
+      box.dataset.start = String(line.start);
+      box.dataset.end = String(line.end);
+      (data.songs || []).forEach(function (song) {
+        var item = el('li');
+        var btn = el('button', '', 'Nr. ' + song.nummer + (song.titel ? ' – ' + song.titel : ''));
+        btn.type = 'button';
+        btn.dataset.nummer = String(song.nummer);
+        item.appendChild(btn);
+        box.appendChild(item);
+      });
+      if (!(data.songs || []).length) { box.appendChild(el('li', 'muted', 'Keine Nummern mit „' + line.text + '“')); }
+      if (data.more) { box.appendChild(el('li', 'muted', 'Weitere Nummern – bitte genauer eingeben')); }
+      box.hidden = false;
+    }).catch(function () { hidePlanSuggest(); });
+  }
+  function planPick(nummer) {
+    var box = $('planSuggest'), ta = $('planLines');
+    var start = Number(box.dataset.start), end = Number(box.dataset.end), v = ta.value;
+    ta.value = v.slice(0, start) + nummer + v.slice(end);
+    ta.dataset.dirty = '1';
+    hidePlanSuggest();
+    ta.focus();
+    ta.setSelectionRange(start + nummer.length, start + nummer.length);
+    sendPlan().then(function () { renderPlan({ songs: planSongs() }); }).catch(function (err) { toast(err.message, true); });
   }
 
   /* Treffer der Suche vormerken, solange das Programm aus ist */
@@ -1165,8 +1249,15 @@ JS = r"""(function () {
   });
   on('queueClearBtn', 'click', function () {
     if (window.confirm('Vorgemerkte Bilder auf dem Server verwerfen?')) {
-      request('POST', '/api/inbox_clear', {}).then(function () { showQueue(0); }).catch(function (err) { toast(err.message, true); });
+      request('POST', '/api/inbox_clear', {}).then(function () { showQueue(0); renderQueue([]); })
+        .catch(function (err) { toast(err.message, true); });
     }
+  });
+  on('queueThumbs', 'click', function (e) {
+    var del = e.target.closest('button[data-qdel]');
+    if (!del) { return; }
+    request('POST', '/api/inbox_remove', { id: Number(del.dataset.qdel) }).then(function () { refreshQueue(); })
+      .catch(function (err) { toast(err.message, true); });
   });
   on('upload', 'change', function () {
     var files = Array.prototype.slice.call($('upload').files);
@@ -1214,7 +1305,17 @@ JS = r"""(function () {
   on('pauseTitle', 'click', function () { setPauseOpen(!pauseOpen); });
   on('planTitle', 'click', function () { setPlanOpen(!planOpen); });
   on('planChevron', 'click', function () { setPlanOpen(!planOpen); });
-  on('planLines', 'input', function () { $('planLines').dataset.dirty = '1'; });
+  on('planLines', 'input', function () {
+    $('planLines').dataset.dirty = '1';
+    clearTimeout(planSuggestTimer);
+    planSuggestTimer = setTimeout(planSuggest, 200);
+  });
+  on('planLines', 'click', function () { clearTimeout(planSuggestTimer); planSuggestTimer = setTimeout(planSuggest, 200); });
+  on('planSuggest', 'mousedown', function (e) { e.preventDefault(); });   // Textfeld behält den Fokus (kein vorzeitiges Speichern)
+  on('planSuggest', 'click', function (e) {
+    var btn = e.target.closest('button[data-nummer]');
+    if (btn) { planPick(btn.dataset.nummer); }
+  });
   on('planLines', 'change', function () { sendPlan().catch(function (err) { toast(err.message, true); }); });
   on('pauseChevron', 'click', function () { setPauseOpen(!pauseOpen); });
   on('pauseBtn', 'click', function () {

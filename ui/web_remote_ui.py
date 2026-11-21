@@ -466,6 +466,7 @@ class RemoteController(QObject):
             raise RemoteError("Ungültige Liederliste.", 400)
         songplan.set_songs(songs)
         w = self.window
+        w.refresh_plan_button()
         if not w._beamer_showing():
             w.prefill_planned_song()
         return {"ok": True, "songs": songplan.get()}

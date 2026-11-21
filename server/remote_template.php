@@ -934,6 +934,38 @@ function browser_api(string $api): void {
     }
 
     if ($api === 'inbox' && $method === 'GET') {
+        // vorgemerkte Bilder (Programm war aus): Anzahl und Liste für die Vorschau auf der Website
+        $q = $db->prepare('SELECT id, name FROM lm_rm_inbox WHERE dev = ? ORDER BY id');
+        $q->execute([cur_dev()]);
+        $items = array_map(function ($row) { return ['id' => (int)$row['id'], 'name' => (string)$row['name']]; },
+            $q->fetchAll(PDO::FETCH_ASSOC));
+        json_out(['pending' => count($items), 'items' => $items]);
+    }
+    if (strpos($api, 'inbox_img/') === 0 && $method === 'GET') {
+        $id = substr($api, 10);
+        if (!ctype_digit($id) || strlen($id) > 18) {
+            fail(400, 'Ungültige Anfrage.');
+        }
+        $q = $db->prepare('SELECT name, body FROM lm_rm_inbox WHERE id = ? AND dev = ?');
+        $q->execute([(int)$id, cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            fail(404, 'Das Bild ist nicht mehr vorgemerkt.');
+        }
+        $types = ['.png' => 'image/png', '.jpg' => 'image/jpeg', '.jpeg' => 'image/jpeg', '.gif' => 'image/gif',
+            '.bmp' => 'image/bmp', '.webp' => 'image/webp'];
+        $type = 'application/octet-stream';
+        foreach ($types as $extension => $mime) {
+            if (substr(strtolower((string)$row['name']), -strlen($extension)) === $extension) {
+                $type = $mime;
+            }
+        }
+        send(200, (string)$row['body'], $type, ['Cache-Control' => 'private, max-age=3600']);
+    }
+    if ($api === 'inbox_remove' && $method === 'POST') {
+        $args = json_decode(read_body(MAX_JSON), true);
+        $db->prepare('DELETE FROM lm_rm_inbox WHERE id = ? AND dev = ?')
+            ->execute([(int)(is_array($args) ? ($args['id'] ?? 0) : 0), cur_dev()]);
         json_out(['pending' => inbox_pending($db)]);
     }
     if ($api === 'pause' && $method === 'GET') {

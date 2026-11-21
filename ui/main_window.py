@@ -36,6 +36,7 @@ from ui.presentation_window import ImagePresentationWindow
 from ui.recording_panel import RecordingPanel
 from ui.recording_upload_ui import RecordingUploader
 from ui.settings_dialog import SettingsDialog
+from ui.songplan_dialog import SongPlanDialog, plan_icon, plan_tooltip
 from ui.side_panel import TAB_IMAGES, SidePanel
 from ui.sync_ui import SyncController
 from ui.updater_ui import UpdateController
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._image_drop_filter = ImageDropFilter(self.add_images, self)
 
+        self.refresh_plan_button()
         QTimer.singleShot(0, self.prefill_planned_song)   # vorgemerktes Lied gleich beim Start in die Suchzeile
 
     # ------------------------------------------------------------------
@@ -230,6 +232,9 @@ class MainWindow(QMainWindow):
             w.themed_icon(w.ICON_SEARCH, t.TEXT_MUTED, 17),
             QLineEdit.ActionPosition.LeadingPosition,
         )
+        # rechts im Suchfeld: vorgemerkte Lieder (mit Anzahl) – Klick öffnet die Liste
+        self.plan_action = search_input.addAction(plan_icon(0), QLineEdit.ActionPosition.TrailingPosition)
+        self.plan_action.triggered.connect(self.open_song_plan)
         search_input.setStyleSheet(t.input_style("QLineEdit", "0 12px"))
         search_input.installEventFilter(self)
         search_input.textChanged.connect(self._on_search_text_changed)
@@ -523,6 +528,21 @@ class MainWindow(QMainWindow):
         self.prefill_planned_song()
         self.search_input.setFocus()
 
+    def refresh_plan_button(self) -> None:
+        """Anzahl der vorgemerkten Lieder am Symbol in der Suchzeile aktualisieren."""
+        count = len(songplan.get())
+        self.plan_action.setIcon(plan_icon(count))
+        self.plan_action.setToolTip(plan_tooltip(count))
+
+    def open_song_plan(self) -> None:
+        dialog = SongPlanDialog(self.db, self)
+        dialog.changed.connect(self.refresh_plan_button)
+        dialog.exec()
+        self.refresh_plan_button()
+        if not self._beamer_showing():
+            self.prefill_planned_song()
+        self.focus_search()
+
     def prefill_planned_song(self) -> None:
         """Leere Suchzeile: das nächste vorgemerkte Lied eintragen (markiert – wer etwas tippt, ersetzt es).
         Zweimal Enter zeigt es wie gewohnt; erst dann fällt es aus der Liste."""
@@ -786,7 +806,8 @@ class MainWindow(QMainWindow):
         atem.switch("presentation")
         if self.current_song_summary is not None:
             songlog.record(self.current_song_summary.nummer, self.current_song_summary.titel)
-            songplan.shown(self.current_song_summary.nummer)    # vorgemerktes Lied war auf dem Beamer: nächstes folgt
+            if songplan.shown(self.current_song_summary.nummer):    # vorgemerktes Lied war auf dem Beamer: nächstes folgt
+                self.refresh_plan_button()
         screen_index = beamer_screen_index()
         self.close_beamer_windows(keep="presentation")   # Galerie und Kamera-Vollbild weichen dem Lied
 
