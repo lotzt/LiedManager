@@ -156,7 +156,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
       </div>
     </div>
 
-    <section id="planPanel" class="pause">
+    <section id="planPanel" class="pause closed">
       <div class="pauseHead">
         <button id="planTitle" class="ptitle" type="button" title="Klicken: Liste ein- oder ausklappen">Vorgemerkte Lieder</button>
         <span id="planCount" class="chip" hidden></span>
@@ -166,6 +166,7 @@ const PAGE_HTML = <<<'LM_PAGE_HTML'
                 placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
                 title="Liednummern, eine pro Zeile – ein einzelner Buchstabe zeigt alle Nummern damit"></textarea>
       <ul id="planSuggest" class="list suggest" hidden></ul>
+      <ol id="planList" class="planlist" hidden></ol>
       <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
         erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht. Ein einzelner Buchstabe (z. B. „p“)
         zeigt alle Nummern damit zur Auswahl.</p>
@@ -488,6 +489,16 @@ input.timeedit { width: 84px; flex: none; text-align: center; padding: 0 8px; fo
   color: var(--text-2); background: rgba(26,24,23,.82); border: 1px solid var(--accent-border); padding: 0;
 }
 .thumbs.queued { margin: 4px 0 12px; }
+.planlist { margin: 0 0 8px; padding: 0 0 0 26px; color: var(--text-2); font-size: var(--fs-small); line-height: 1.6; }
+.planlist .missing { color: var(--rec); }
+#planPanel.closed .planlist { display: none; }
+#results li { display: flex; align-items: center; gap: 8px; }
+#results li > button:first-child { flex: 1; min-width: 0; }
+#results .add {
+  flex: none; width: 34px; height: 34px; border-radius: 17px; padding: 0; text-align: center; font-size: 20px; line-height: 30px;
+  color: var(--accent-light); background: none; border: 1px solid var(--accent-border);
+}
+#results .add:hover { border-color: var(--accent); color: var(--text); }
 .list.suggest { margin: 0 0 8px; max-height: 240px; overflow-y: auto; }
 .thumb .del:hover { color: var(--text); border-color: var(--accent); }
 .cam { display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 8px 0; }
@@ -1058,6 +1069,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     $('planHint').hidden = !open;
     $('planChevron').classList.toggle('open', open);
     if (!open) { hidePlanSuggest(); }
+    $('planPanel').classList.toggle('closed', !open);
   }
   function planSongs() {
     return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
@@ -1067,6 +1079,29 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     if (document.activeElement !== $('planLines') && !$('planLines').dataset.dirty) { $('planLines').value = songs.join('\n'); }
     $('planCount').textContent = songs.length;
     $('planCount').hidden = songs.length === 0;
+    loadPlanTitles(songs);
+  }
+  /* Titel zu den vorgemerkten Nummern (aus der Liederliste auf dem Server) */
+  var planTitlesSig = null, planTitlesSeq = 0;
+  function loadPlanTitles(songs) {
+    var sig = JSON.stringify(songs);
+    if (sig === planTitlesSig) { return; }
+    planTitlesSig = sig;
+    var box = $('planList');
+    if (!songs.length) { box.hidden = true; box.textContent = ''; return; }
+    var seq = ++planTitlesSeq;
+    request('POST', '/api/plan_titles', { songs: songs }).then(function (r) {
+      if (seq !== planTitlesSeq) { return; }
+      box.textContent = '';
+      if (!r.index) { box.hidden = true; return; }      // noch keine Liederliste auf dem Server: nur die Nummern
+      songs.forEach(function (number, i) {
+        var hit = r.titles[i];
+        var item = el('li', hit ? '' : 'missing', hit ? ('Nr. ' + hit.nummer + (hit.titel ? ' – ' + hit.titel : ''))
+          : (number + ' – nicht gefunden'));
+        box.appendChild(item);
+      });
+      box.hidden = false;
+    }).catch(function () { planTitlesSig = null; });
   }
   function loadOfflinePlan() {
     if (Date.now() - offlinePlanAt < 5000) { return; }
@@ -1074,6 +1109,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     request('GET', '/api/plan').then(function (r) { renderPlan(r.pending || r.last || { songs: [] }); }).catch(function () {});
   }
   function sendPlan() {
+    loadPlanTitles(planSongs());
     return act('plan_set', { songs: planSongs() }, true).then(function (r) {
       if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
       delete $('planLines').dataset.dirty;
@@ -1127,7 +1163,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   }
 
   /* Treffer der Suche vormerken, solange das Programm aus ist */
-  function planAdd(nummer) {
+  function planAdd(nummer, keepResults) {
     if (!nummer) { return; }
     var songs = planSongs();
     songs.push(nummer);
@@ -1135,9 +1171,11 @@ const PAGE_JS = <<<'LM_PAGE_JS'
     $('planLines').dataset.dirty = '1';
     $('planCount').textContent = songs.length;
     $('planCount').hidden = false;
-    setPlanOpen(true);
-    hideResults();
-    $('q').value = '';
+    if (!keepResults) {
+      setPlanOpen(true);
+      hideResults();
+      $('q').value = '';
+    }
     sendPlan().then(function () { toast('Nr. ' + nummer + ' vorgemerkt'); })
       .catch(function (err) { toast(err.message, true); });
   }
@@ -1185,6 +1223,7 @@ const PAGE_JS = <<<'LM_PAGE_JS'
       list.textContent = '';
       showResults();
       if (data.offline && data.songs.length) { list.appendChild(el('li', 'muted', 'Programm aus – antippen merkt das Lied vor')); }
+      else if (data.songs.length) { list.appendChild(el('li', 'muted', 'Antippen wählt das Lied · + merkt es vor')); }
       if (!data.songs.length) {
         var none = el('li', 'muted', 'Kein Lied gefunden');
         list.appendChild(none);
@@ -1197,6 +1236,12 @@ const PAGE_JS = <<<'LM_PAGE_JS'
         btn.dataset.rowid = String(song.rowid);
         btn.dataset.nummer = String(song.nummer);
         item.appendChild(btn);
+        var add = el('button', 'add', '+');
+        add.type = 'button';
+        add.title = 'Vormerken (kommt zu den vorgemerkten Liedern)';
+        add.setAttribute('aria-label', 'Nr. ' + song.nummer + ' vormerken');
+        add.dataset.plan = String(song.nummer);
+        item.appendChild(add);
         list.appendChild(item);
       });
       if (data.more) { list.appendChild(el('li', 'muted', 'Weitere Treffer – bitte genauer suchen')); }
@@ -1232,6 +1277,8 @@ const PAGE_JS = <<<'LM_PAGE_JS'
   on('q', 'input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(search, 250); });
   on('q', 'keydown', function (e) { if (e.key === 'Enter') { clearTimeout(searchTimer); search(); } });
   on('results', 'click', function (e) {
+    var plus = e.target.closest('button[data-plan]');
+    if (plus) { planAdd(plus.dataset.plan, true); return; }
     var btn = e.target.closest('button[data-rowid]');
     if (!btn) { return; }
     if (document.body.classList.contains('offline')) { planAdd(btn.dataset.nummer); return; }
@@ -1958,6 +2005,47 @@ function offline_search(PDO $db, string $raw): array {
     return $reply(array_column($found, 2));
 }
 
+/** Nummer → Lied (wie die Nummernsuche im Programm, Verweise aufgelöst); null, wenn es keine solche Nummer gibt. */
+function plan_titles(PDO $db, array $numbers): array {
+    $q = $db->prepare('SELECT dev, gen FROM lm_rm_songs_ver ORDER BY dev = ? DESC, updated DESC LIMIT 1');
+    $q->execute([cur_dev()]);
+    $ver = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$ver) {
+        return ['index' => false, 'titles' => []];
+    }
+    $q = $db->prepare('SELECT k, nummer, titel, alias FROM lm_rm_songs WHERE dev = ? AND gen = ? ORDER BY pos');
+    $q->execute([$ver['dev'], $ver['gen']]);
+    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    $byKey = [];
+    foreach ($rows as $row) {
+        if (!isset($byKey[$row['k']])) {
+            $byKey[$row['k']] = $row;
+        }
+    }
+    $titles = [];
+    foreach ($numbers as $raw) {
+        $key = (string)preg_replace('/\s+/u', '', lm_lower(trim($raw)));
+        $song = $key !== '' ? ($byKey[$key] ?? null) : null;
+        if ($song === null && preg_match('/^([a-z])?(\d{1,3})$/', $key, $m)) {
+            $prefix = $m[1] !== '' ? $m[1] : 'p';
+            $song = $byKey[$prefix . sprintf('%03d', (int)$m[2])] ?? $byKey[$prefix . (int)$m[2]] ?? null;
+            if ($song === null) {
+                foreach ($rows as $row) {
+                    if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === (int)$m[2]) {
+                        $song = $row;
+                        break;
+                    }
+                }
+            }
+        }
+        if ($song !== null && $song['alias'] !== '' && isset($byKey[$song['alias']])) {
+            $song = $byKey[$song['alias']];
+        }
+        $titles[] = $song === null ? null : ['nummer' => (string)$song['nummer'], 'titel' => (string)$song['titel']];
+    }
+    return ['index' => true, 'titles' => $titles];
+}
+
 /** Liederliste eines umbenannten Computers übernehmen (nur wenn der neue Name noch keine hat). */
 function songs_move(PDO $db, string $old): void {
     $q = $db->prepare('SELECT 1 FROM lm_rm_songs_ver WHERE dev = ?');
@@ -2322,6 +2410,12 @@ function browser_api(string $api): void {
             JSON_UNESCAPED_UNICODE);
         $db->prepare('REPLACE INTO lm_rm_pause (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
         json_out(['ok' => true, 'queued' => true], 202);
+    }
+    if ($api === 'plan_titles' && $method === 'POST') {
+        // Titel zu den vorgemerkten Nummern – aus der Liederliste, die das Programm hochgeladen hat
+        $args = json_decode(read_body(MAX_JSON), true);
+        $songs = is_array($args) && is_array($args['songs'] ?? null) ? array_slice($args['songs'], 0, 100) : [];
+        json_out(plan_titles($db, array_map(function ($v) { return is_scalar($v) ? (string)$v : ''; }, $songs)));
     }
     if ($api === 'search' && $method === 'POST' && !app_alive($db)) {
         // Programm läuft nicht: in der zuletzt übertragenen Liederliste suchen (wie die Suche im Programm)

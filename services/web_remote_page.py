@@ -127,7 +127,7 @@ HTML = """<!doctype html>
       </div>
     </div>
 
-    <section id="planPanel" class="pause">
+    <section id="planPanel" class="pause closed">
       <div class="pauseHead">
         <button id="planTitle" class="ptitle" type="button" title="Klicken: Liste ein- oder ausklappen">Vorgemerkte Lieder</button>
         <span id="planCount" class="chip" hidden></span>
@@ -137,6 +137,7 @@ HTML = """<!doctype html>
                 placeholder="Liednummern, eine pro Zeile – z. B. p012" aria-label="Vorgemerkte Lieder"
                 title="Liednummern, eine pro Zeile – ein einzelner Buchstabe zeigt alle Nummern damit"></textarea>
       <ul id="planSuggest" class="list suggest" hidden></ul>
+      <ol id="planList" class="planlist" hidden></ol>
       <p id="planHint" class="muted" hidden>Die Nummern kommen im Programm nacheinander in die Suchzeile. Ein Lied fällt
         erst aus der Liste, wenn es auf dem Beamer war – Nachschauen zählt nicht. Ein einzelner Buchstabe (z. B. „p“)
         zeigt alle Nummern damit zur Auswahl.</p>
@@ -458,6 +459,16 @@ input.timeedit { width: 84px; flex: none; text-align: center; padding: 0 8px; fo
   color: var(--text-2); background: rgba(26,24,23,.82); border: 1px solid var(--accent-border); padding: 0;
 }
 .thumbs.queued { margin: 4px 0 12px; }
+.planlist { margin: 0 0 8px; padding: 0 0 0 26px; color: var(--text-2); font-size: var(--fs-small); line-height: 1.6; }
+.planlist .missing { color: var(--rec); }
+#planPanel.closed .planlist { display: none; }
+#results li { display: flex; align-items: center; gap: 8px; }
+#results li > button:first-child { flex: 1; min-width: 0; }
+#results .add {
+  flex: none; width: 34px; height: 34px; border-radius: 17px; padding: 0; text-align: center; font-size: 20px; line-height: 30px;
+  color: var(--accent-light); background: none; border: 1px solid var(--accent-border);
+}
+#results .add:hover { border-color: var(--accent); color: var(--text); }
 .list.suggest { margin: 0 0 8px; max-height: 240px; overflow-y: auto; }
 .thumb .del:hover { color: var(--text); border-color: var(--accent); }
 .cam { display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 8px 0; }
@@ -1027,6 +1038,7 @@ JS = r"""(function () {
     $('planHint').hidden = !open;
     $('planChevron').classList.toggle('open', open);
     if (!open) { hidePlanSuggest(); }
+    $('planPanel').classList.toggle('closed', !open);
   }
   function planSongs() {
     return $('planLines').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
@@ -1036,6 +1048,29 @@ JS = r"""(function () {
     if (document.activeElement !== $('planLines') && !$('planLines').dataset.dirty) { $('planLines').value = songs.join('\n'); }
     $('planCount').textContent = songs.length;
     $('planCount').hidden = songs.length === 0;
+    loadPlanTitles(songs);
+  }
+  /* Titel zu den vorgemerkten Nummern (aus der Liederliste auf dem Server) */
+  var planTitlesSig = null, planTitlesSeq = 0;
+  function loadPlanTitles(songs) {
+    var sig = JSON.stringify(songs);
+    if (sig === planTitlesSig) { return; }
+    planTitlesSig = sig;
+    var box = $('planList');
+    if (!songs.length) { box.hidden = true; box.textContent = ''; return; }
+    var seq = ++planTitlesSeq;
+    request('POST', '/api/plan_titles', { songs: songs }).then(function (r) {
+      if (seq !== planTitlesSeq) { return; }
+      box.textContent = '';
+      if (!r.index) { box.hidden = true; return; }      // noch keine Liederliste auf dem Server: nur die Nummern
+      songs.forEach(function (number, i) {
+        var hit = r.titles[i];
+        var item = el('li', hit ? '' : 'missing', hit ? ('Nr. ' + hit.nummer + (hit.titel ? ' – ' + hit.titel : ''))
+          : (number + ' – nicht gefunden'));
+        box.appendChild(item);
+      });
+      box.hidden = false;
+    }).catch(function () { planTitlesSig = null; });
   }
   function loadOfflinePlan() {
     if (Date.now() - offlinePlanAt < 5000) { return; }
@@ -1043,6 +1078,7 @@ JS = r"""(function () {
     request('GET', '/api/plan').then(function (r) { renderPlan(r.pending || r.last || { songs: [] }); }).catch(function () {});
   }
   function sendPlan() {
+    loadPlanTitles(planSongs());
     return act('plan_set', { songs: planSongs() }, true).then(function (r) {
       if (r && r.queued) { offlinePlanAt = 0; toast('Vorgemerkt – wird beim nächsten Start übernommen'); }
       delete $('planLines').dataset.dirty;
@@ -1096,7 +1132,7 @@ JS = r"""(function () {
   }
 
   /* Treffer der Suche vormerken, solange das Programm aus ist */
-  function planAdd(nummer) {
+  function planAdd(nummer, keepResults) {
     if (!nummer) { return; }
     var songs = planSongs();
     songs.push(nummer);
@@ -1104,9 +1140,11 @@ JS = r"""(function () {
     $('planLines').dataset.dirty = '1';
     $('planCount').textContent = songs.length;
     $('planCount').hidden = false;
-    setPlanOpen(true);
-    hideResults();
-    $('q').value = '';
+    if (!keepResults) {
+      setPlanOpen(true);
+      hideResults();
+      $('q').value = '';
+    }
     sendPlan().then(function () { toast('Nr. ' + nummer + ' vorgemerkt'); })
       .catch(function (err) { toast(err.message, true); });
   }
@@ -1154,6 +1192,7 @@ JS = r"""(function () {
       list.textContent = '';
       showResults();
       if (data.offline && data.songs.length) { list.appendChild(el('li', 'muted', 'Programm aus – antippen merkt das Lied vor')); }
+      else if (data.songs.length) { list.appendChild(el('li', 'muted', 'Antippen wählt das Lied · + merkt es vor')); }
       if (!data.songs.length) {
         var none = el('li', 'muted', 'Kein Lied gefunden');
         list.appendChild(none);
@@ -1166,6 +1205,12 @@ JS = r"""(function () {
         btn.dataset.rowid = String(song.rowid);
         btn.dataset.nummer = String(song.nummer);
         item.appendChild(btn);
+        var add = el('button', 'add', '+');
+        add.type = 'button';
+        add.title = 'Vormerken (kommt zu den vorgemerkten Liedern)';
+        add.setAttribute('aria-label', 'Nr. ' + song.nummer + ' vormerken');
+        add.dataset.plan = String(song.nummer);
+        item.appendChild(add);
         list.appendChild(item);
       });
       if (data.more) { list.appendChild(el('li', 'muted', 'Weitere Treffer – bitte genauer suchen')); }
@@ -1201,6 +1246,8 @@ JS = r"""(function () {
   on('q', 'input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(search, 250); });
   on('q', 'keydown', function (e) { if (e.key === 'Enter') { clearTimeout(searchTimer); search(); } });
   on('results', 'click', function (e) {
+    var plus = e.target.closest('button[data-plan]');
+    if (plus) { planAdd(plus.dataset.plan, true); return; }
     var btn = e.target.closest('button[data-rowid]');
     if (!btn) { return; }
     if (document.body.classList.contains('offline')) { planAdd(btn.dataset.nummer); return; }

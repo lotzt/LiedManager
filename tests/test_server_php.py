@@ -195,3 +195,11 @@ def test_liedsuche_ohne_programm(server):
         expected = [(s.nummer, s.titel) for s in db.search_songs(query)]
         got = [(s["nummer"], s["titel"]) for s in search(query)]
         assert [str(n) for n, _ in got] == [str(n) for n, _ in expected], (query, got, expected)
+
+    # Titel zu vorgemerkten Nummern (Verweise aufgelöst, Unbekanntes = null)
+    status, body = http(f"{url}?api=plan_titles", {"songs": ["1", "100", "B1", "zz9"]}, head)
+    assert status == 200, body
+    data = json.loads(body)
+    assert data["index"], data
+    assert [t and t["nummer"] for t in data["titles"]] == ["1", "1", "b1", None], data
+    assert data["titles"][0]["titel"] == "Großer Gott, wir loben dich", data
