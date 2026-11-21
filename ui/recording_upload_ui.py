@@ -8,10 +8,10 @@ import threading
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from services import recording_upload as upload
-from services import wordpress_upload
+from services import site_access, wordpress_upload
 from services.server_sync import SyncError
 from services.settings import app_settings
-from ui.web_remote_ui import KEY_SITE_TOKEN, KEY_SITE_URL
+from ui.web_remote_ui import KEY_SITE_URL
 
 log = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class RecordingUploader(QObject):
     def _work(self) -> None:
         settings = app_settings()
         url = str(settings.value(KEY_SITE_URL, "", type=str)).strip()
-        token = str(settings.value(KEY_SITE_TOKEN, "", type=str)).strip()
+        token = site_access.token()
         wordpress = True                                      # Aufnahmen gehen immer in die WordPress-Mediathek
         target = "in der WordPress-Mediathek"
         for path in upload.pending():

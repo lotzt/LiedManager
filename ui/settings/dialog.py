@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QVBoxLayout,
 )
 
-from services import autostart, devices, screens, songlog, xair
+from services import autostart, devices, screens, site_access, songlog, xair
 from services.remote_relay import device_name
 from services.settings import app_settings
 from services.settings_keys import (
@@ -27,7 +27,7 @@ from ui.settings.general import GeneralTab
 from ui.settings.mixer import MixerTab
 from ui.settings.remote import RemoteTab
 from ui.settings.songs import SongsTab
-from ui.sync_ui import KEY_SYNC_AUTO, KEY_SYNC_TOKEN, KEY_SYNC_URL
+from ui.sync_ui import KEY_SYNC_AUTO, KEY_SYNC_URL
 from ui.updater_ui import KEY_CHECK_ON_START
 from ui.web_remote_ui import KEY_DEVICE_NAME, KEY_SITE_ENABLED, KEY_SITE_TOKEN, KEY_SITE_URL
 from version import __version__
@@ -228,7 +228,6 @@ class SettingsDialog(QDialog, FormBuilder, GeneralTab, SongsTab, AudioTab, Camer
         self.update_checkbox.setChecked(s.value(KEY_CHECK_ON_START, True, type=bool))
         self.db_path_input.setText(s.value(KEY_DATABASE_PATH, "", type=str))
         self.sync_url_input.setText(s.value(KEY_SYNC_URL, "", type=str))
-        self.sync_token_input.setText(s.value(KEY_SYNC_TOKEN, "", type=str))
         self.sync_auto_checkbox.blockSignals(True)
         self.sync_auto_checkbox.setChecked(s.value(KEY_SYNC_AUTO, True, type=bool))
         self.sync_auto_checkbox.blockSignals(False)
@@ -249,7 +248,8 @@ class SettingsDialog(QDialog, FormBuilder, GeneralTab, SongsTab, AudioTab, Camer
         self.wp_user_input.setText(s.value(KEY_WP_USER, "", type=str))
         self.wp_password_input.setText(s.value(KEY_WP_PASSWORD, "", type=str))
         self.site_url_input.setText(s.value(KEY_SITE_URL, "", type=str))
-        self.site_token_input.setText(s.value(KEY_SITE_TOKEN, "", type=str))
+        self.site_token_input.setText(site_access.token())     # ein Token für Remote, Abgleich und Aufnahmen
+        self._update_url_hints()
         if getattr(self.parent(), "remote", None) is not None:
             self.site_status_label.setText(self.parent().remote.site_status)
 
@@ -304,7 +304,6 @@ class SettingsDialog(QDialog, FormBuilder, GeneralTab, SongsTab, AudioTab, Camer
         s.setValue(KEY_RECORDING_PATH, self.rec_path_input.text().strip())
         s.setValue(KEY_DATABASE_PATH, self.db_path_input.text().strip())
         s.setValue(KEY_SYNC_URL, self.sync_url_input.text().strip())
-        s.setValue(KEY_SYNC_TOKEN, self.sync_token_input.text().strip())
         s.setValue(KEY_SYNC_AUTO, self.sync_auto_checkbox.isChecked())
         s.setValue(KEY_SITE_ENABLED, self.site_checkbox.isChecked())
         s.setValue(KEY_DEVICE_NAME, self.device_name_input.text().strip())

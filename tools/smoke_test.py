@@ -1519,20 +1519,29 @@ def main() -> int:
 
     # ---- Datenbank-Abgleich: Einstellungen und Hintergrund-Abgleich -----------------------------
     from ui.settings_dialog import SettingsDialog
-    from ui.sync_ui import KEY_SYNC_TOKEN, KEY_SYNC_URL
+    from services import site_access
+    from ui.sync_ui import KEY_SYNC_URL
     sync_server = FakeSyncServer()
     try:
+        # ein Token für alles: ein altes Abgleich-Token wird übernommen, wenn das gemeinsame noch leer ist
+        app_settings().setValue(site_access.KEY_TOKEN, "")
+        app_settings().setValue(site_access.KEY_OLD_SYNC_TOKEN, "altes-abgleich-token-12345")
+        assert site_access.token() == "altes-abgleich-token-12345", "altes Abgleich-Token wurde nicht übernommen"
+        app_settings().setValue(site_access.KEY_TOKEN, "")
+        app_settings().setValue(site_access.KEY_OLD_SYNC_TOKEN, "")
+        assert site_access.sibling_url("https://a.de/steuerung/remote.php", "sync", "sync.php") == "https://a.de/sync/sync.php"
         assert window.sync.url() == "", "Abgleich muss ohne Server-Adresse aus sein"
         dialog = SettingsDialog(window)
         assert dialog.sync_url_input.text() == "" and "Aus" in dialog.sync_status_label.text()
         assert not hasattr(dialog, "sync_checkbox") and not dialog.sync_now_btn.isEnabled()
-        for widget in (dialog.sync_url_input, dialog.sync_token_input, dialog.sync_now_btn,
+        assert not hasattr(dialog, "sync_token_input"), "es gibt nur noch ein Token-Feld (Reiter Remote)"
+        for widget in (dialog.sync_url_input, dialog.site_token_input, dialog.sync_now_btn,
                        dialog.sync_force_btn):
             assert widget.toolTip(), "neue Elemente brauchen einen Hover-Hinweis"
         asked = []
         dialog.sync_requested.connect(lambda url, token: asked.append((url, token)))
         dialog.sync_url_input.setText(sync_server.url)
-        dialog.sync_token_input.setText(FakeSyncServer.TOKEN)
+        dialog.site_token_input.setText(FakeSyncServer.TOKEN)
         dialog._apply_sync_fields()                    # wirkt sofort, sobald eine Adresse da ist
         assert window.sync.enabled() and window.sync._timer.isActive()
         dialog.sync_now_btn.click()
@@ -1558,7 +1567,7 @@ def main() -> int:
         assert dialog.sync_url_input.text() == sync_server.url and dialog.sync_now_btn.isEnabled()
         dialog.close()
         app_settings().setValue(KEY_SYNC_URL, "")
-        app_settings().setValue(KEY_SYNC_TOKEN, "")
+        app_settings().setValue(site_access.KEY_TOKEN, "")
         window.sync.configure()
         assert not window.sync._timer.isActive() and "Aus" in window.sync.status
     finally:

@@ -5,7 +5,7 @@ import time
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 from paths import sync_state_path
-from services import db_backup
+from services import db_backup, site_access
 from services.server_sync import ServerSync, SyncResult
 from services.settings import app_settings
 
@@ -93,7 +93,7 @@ class SyncController(QObject):
 
     @staticmethod
     def token() -> str:
-        return str(app_settings().value(KEY_SYNC_TOKEN, "", type=str)).strip()
+        return site_access.token()                 # dasselbe Token wie remote.php (gemeinsame Zugangsdatei)
 
     @classmethod
     def enabled(cls) -> bool:

@@ -3,6 +3,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QLineEdit
 
+from services import site_access
 from ui import theme as t
 from ui.sync_ui import STATUS_OFF
 from ui.web_remote_ui import KEY_DEVICE_NAME, KEY_SITE_ENABLED, KEY_SITE_TOKEN, KEY_SITE_URL
@@ -17,14 +18,16 @@ class RemoteTab:
         self.site_checkbox.setToolTip("Bedienung per Handy über die Website")
         self.site_url_input = self._line_edit("https://deine-domain.de/steuerung/remote.php")
         self.site_url_input.setToolTip("Adresse von remote.php")
-        self.site_token_input = self._line_edit("Token (steht in remote.php)")
+        self.site_token_input = self._line_edit("Token (steht in liedmanager-zugang.php)")
         self.site_token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.site_token_input.setToolTip("Token aus remote.php")
+        self.site_token_input.setToolTip("Gemeinsames Token aus liedmanager-zugang.php –\n"
+                                         "gilt für Remote-Steuerung, Abgleich (sync.php) und Aufnahmen")
         self.device_name_input = self._line_edit("z. B. Kirche, Büro, Laptop")
         self.device_name_input.setToolTip("Name dieses Computers in der Fernsteuerung")
         self.device_name_input.editingFinished.connect(self._save_device_name)
         self.site_checkbox.toggled.connect(self._site_toggled)
         self.site_url_input.editingFinished.connect(self._save_site_fields)
+        self.site_url_input.textChanged.connect(self._update_url_hints)
         self.site_token_input.editingFinished.connect(self._save_site_fields)
         self.site_status_label = QLabel(STATUS_OFF)
         self.site_status_label.setWordWrap(True)
@@ -52,9 +55,21 @@ class RemoteTab:
 
     def _save_site_fields(self):
         s = self.settings
+        changed = self.site_token_input.text().strip() != site_access.token()
         s.setValue(KEY_SITE_URL, self.site_url_input.text().strip())
         s.setValue(KEY_SITE_TOKEN, self.site_token_input.text().strip())
         s.sync()
+        sync = getattr(self.parent(), "sync", None)
+        if changed and sync is not None:
+            sync.configure()                   # gemeinsames Token: auch der Abgleich nimmt das neue
+
+    def _update_url_hints(self, *_args):
+        """Ist nur eine der beiden Adressen eingetragen, zeigt das leere Feld einen passenden Vorschlag."""
+        site, sync = self.site_url_input.text().strip(), self.sync_url_input.text().strip()
+        suggestion = site_access.sibling_url(site, "sync", "sync.php") if site else ""
+        self.sync_url_input.setPlaceholderText(suggestion or "https://deine-domain.de/sync/sync.php")
+        suggestion = site_access.sibling_url(sync, "steuerung", "remote.php") if sync else ""
+        self.site_url_input.setPlaceholderText(suggestion or "https://deine-domain.de/steuerung/remote.php")
 
     def _site_toggled(self, on: bool):
         """Remote sofort ein- oder ausschalten: beim Ausschalten wird die Verbindung getrennt und die Anzeige geleert."""
