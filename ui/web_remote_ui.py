@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-from PyQt6.QtCore import QBuffer, QIODevice, QObject, QSize, Qt, QTime, pyqtSignal
+from PyQt6.QtCore import QBuffer, QIODevice, QObject, QSize, Qt, QTime, QTimer, pyqtSignal
 from PyQt6.QtGui import QImageReader
 
 from paths import user_data_dir
@@ -38,7 +38,10 @@ KEY_SITE_ENABLED = "web_site_enabled"
 KEY_SITE_URL = "web_site_url"
 KEY_SITE_TOKEN = "web_site_token"
 STATUS_OFF = "Aus"
-GUI_TIMEOUT = 8.0              # so lange wartet eine Anfrage aus dem Browser auf das Programm
+# Beim Programmstart sind Schlüsselbund (Token) oder Netzwerk manchmal noch nicht bereit (z. B. direkt nach dem
+# Windows-Login). Darum wird ein fehlgeschlagener Start noch ein paarmal selbst wiederholt.
+START_RETRY_DELAYS_MS = (1500, 4000, 10000, 30000)
+GUI_TIMEOUT = 8.0             # so lange wartet eine Anfrage aus dem Browser auf das Programm
 MAX_RESULTS = 60
 THUMB_SIZE = QSize(320, 200)
 UPLOAD_KEEP_SECONDS = 7 * 24 * 3600
@@ -77,6 +80,10 @@ class RemoteController(QObject):
         self.site_status = STATUS_OFF
         self._relay = None
         self._site_signature = None
+        self._start_attempt = 0       # wie oft ein fehlgeschlagener Start schon automatisch wiederholt wurde
+        self._start_retry = QTimer(self)
+        self._start_retry.setSingleShot(True)
+        self._start_retry.timeout.connect(self._retry_configure)
         self._found = {}              # rowid -> SongSummary der letzten Suche
         self._image_paths = []        # Stand der Bilder-Ablage (für Vorschaubilder, vom Oberflächen-Thread gesetzt)
         self._thumbs = {}
@@ -114,6 +121,15 @@ class RemoteController(QObject):
 
     def configure(self) -> None:
         """Verbindet mit der eigenen Website, trennt oder startet neu – nur wenn sich Adresse oder Token geändert haben."""
+        self._start_attempt = 0
+        self._configure()
+
+    def _retry_configure(self) -> None:
+        self._start_attempt += 1
+        self._configure()
+
+    def _configure(self) -> None:
+        self._start_retry.stop()
         self.forget_legacy_settings()
         if not self.site_enabled():
             self._stop_site()
@@ -127,12 +143,19 @@ class RemoteController(QObject):
         error = client.start()
         if error:
             self._set_site_status(f"Nicht gestartet – {error}")
+            if self._start_attempt < len(START_RETRY_DELAYS_MS):
+                log.info("Website-Steuerung nicht gestartet (%s) – neuer Versuch %d von %d",
+                         error, self._start_attempt + 1, len(START_RETRY_DELAYS_MS))
+                self._start_retry.start(START_RETRY_DELAYS_MS[self._start_attempt])
+            else:
+                log.warning("Website-Steuerung nicht gestartet: %s", error)
             return
         self._relay = client
         self._site_signature = signature
         threading.Thread(target=forget_old_name, args=signature, name="device-rename", daemon=True).start()
 
     def _stop_site(self) -> None:
+        self._start_retry.stop()
         client, self._relay = self._relay, None
         self._site_signature = None
         if client is not None:
