@@ -493,6 +493,33 @@ function lm_lower(string $text): string {
     return function_exists('mb_strtolower') ? mb_strtolower($text, 'UTF-8') : strtolower($text);
 }
 
+/** Lied zu einem Nummern-Schlüssel: genau so geschrieben, sonst mit anderer Schreibweise der Ziffern (p12 = p012). */
+function lm_find_key(array $byKey, string $key): ?array {
+    $key = (string)preg_replace('/\s+/u', '', lm_lower($key));
+    if (isset($byKey[$key])) {
+        return $byKey[$key];
+    }
+    if (!preg_match('/^([a-z]*)0*(\d+)$/', $key, $m)) {
+        return null;
+    }
+    $number = (int)$m[2];
+    return $byKey[$m[1] . sprintf('%03d', $number)] ?? $byKey[$m[1] . $number] ?? null;
+}
+
+/** Folgt Verweisen bis zum eigentlichen Lied (auch über mehrere Stationen; ohne Ziel oder im Kreis: letztes Lied). */
+function lm_follow_alias(array $byKey, array $song): array {
+    $seen = [$song['k'] => true];
+    for ($i = 0; $i < 10 && $song['alias'] !== ''; $i++) {
+        $target = lm_find_key($byKey, (string)$song['alias']);
+        if ($target === null || isset($seen[$target['k']])) {
+            break;
+        }
+        $seen[$target['k']] = true;
+        $song = $target;
+    }
+    return $song;
+}
+
 /** Wie normalize() im Programm: Kleinschreibung, ohne Satzzeichen, Leerraum zusammengefasst. */
 function lm_norm(string $text): string {
     $text = (string)preg_replace('/[^\p{L}\p{N}_\s]+/u', '', lm_lower($text));
@@ -564,8 +591,11 @@ function offline_search(PDO $db, string $raw): array {
         if ($m[1] === '') {
             // Ohne Buchstabe zuerst die reine Nummer ansehen: Ist sie ein Verweis (z. B. 512 -> p102), gilt das Ziel.
             $plain = $byKey[sprintf('%03d', $number)] ?? $byKey[(string)$number] ?? null;
-            if ($plain !== null && $plain['alias'] !== '' && isset($byKey[$plain['alias']])) {
-                $song = $byKey[$plain['alias']];
+            if ($plain !== null && $plain['alias'] !== '') {
+                $resolved = lm_follow_alias($byKey, $plain);
+                if ($resolved['k'] !== $plain['k']) {
+                    $song = $resolved;
+                }
             }
         }
         if ($song === null) {
@@ -580,10 +610,7 @@ function offline_search(PDO $db, string $raw): array {
             }
         }
         if ($song !== null) {
-            if ($song['alias'] !== '' && isset($byKey[$song['alias']])) {
-                $song = $byKey[$song['alias']];
-            }
-            return $reply([$song]);
+            return $reply([lm_follow_alias($byKey, $song)]);
         }
     }
 
@@ -691,8 +718,8 @@ function plan_titles(PDO $db, array $numbers): array {
                 }
             }
         }
-        if ($song !== null && $song['alias'] !== '' && isset($byKey[$song['alias']])) {
-            $song = $byKey[$song['alias']];
+        if ($song !== null) {
+            $song = lm_follow_alias($byKey, $song);
         }
         $titles[] = $song === null ? null : ['nummer' => (string)$song['nummer'], 'titel' => (string)$song['titel']];
     }

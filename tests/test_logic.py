@@ -63,7 +63,10 @@ def test_nummer_ohne_praefix_folgt_verweis(tmp):
     for nummer, alias, titel, lyrics in (
             ("p102", None, "Lied 102", "a"), ("512", "p102", "Verweis 512", None), ("p512", None, "Lied p512", "b"),
             ("p012", None, "Lied p012", "c"), ("12", None, "Lied 12", "d"),
-            ("700", "p999", "Verweis ins Leere", "e"), ("p700", None, "Lied p700", "f")):
+            ("700", "p999", "Verweis ins Leere", "e"), ("p700", None, "Lied p700", "f"),
+            ("s200", "p102", "Verweis s200", None),                       # anderes Präfix mit Verweis
+            ("600", "p12", "Verweis ohne führende Null", None),           # p12 = p012
+            ("800", "801", "Kette 800", None), ("801", "p102", "Kette 801", None)):   # mehrere Stationen
         con.execute("INSERT INTO Data (nummer, alias, titel, lyrics) VALUES (?, ?, ?, ?)", (nummer, alias, titel, lyrics))
     con.commit()
     con.close()
@@ -76,3 +79,6 @@ def test_nummer_ohne_praefix_folgt_verweis(tmp):
     assert numbers("p512") == ["p512"], "mit Buchstabe gilt genau diese Nummer"
     assert numbers("12") == ["p012"], "ohne Verweis bleibt es bei p + Nummer"
     assert numbers("700") == ["p700"], "Verweis ohne Ziel: weiter wie bisher"
+    assert numbers("s200") == ["p102"], "Verweise gelten bei jedem Präfix"
+    assert numbers("600") == ["p012"], "Verweis p12 findet p012"
+    assert numbers("800") == ["p102"], "Verweisketten werden bis zum Ziel verfolgt"
