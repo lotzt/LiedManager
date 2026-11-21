@@ -66,7 +66,7 @@ Minute und auf Knopfdruck im Hintergrund ab – ist gerade kein Internet da, kla
 **Auf jedem Gerät:**
 
 1. Die Datenbank auf alle Geräte kopieren (gleicher Ausgangsstand).
-2. *Einstellungen → Lieder*: „Abgleich einschalten“, Adresse (`https://…/sync/sync.php`) und dasselbe Token eintragen (wird sofort gespeichert; beim Ausschalten bleiben beide erhalten).
+2. *Einstellungen → Lieder*: Adresse (`https://…/sync/sync.php`) eintragen; das Token steht einmal für alles unter *Einstellungen → Remote* (wird sofort gespeichert).
 3. Fertig. Beim ersten Mal gilt der aktuelle Stand als Ausgangspunkt, es wird nichts hochgeladen.
 
 Ändert man die Datenbank mit einem Editor, erkennt LiedManager die Änderung und schickt sie zum Server; die anderen
@@ -113,7 +113,7 @@ nicht, zeigt die Seite „getrennt“.
    ersten Aufruf selbst an.
 
 **Im Programm:** *Einstellungen → Remote*: Haken setzen, Adresse von `remote.php` und
-dasselbe Token eintragen. Die Statuszeile zeigt „Verbunden – im Browser öffnen: …“. Diese Adresse öffnest du auf dem Handy
+das Token aus `liedmanager-zugang.php` eintragen (es gilt auch für Abgleich und Aufnahmen). Die Statuszeile zeigt „Verbunden – im Browser öffnen: …“. Diese Adresse öffnest du auf dem Handy
 und meldest dich mit der PIN aus `liedmanager-zugang.php` an.
 
 **Updates:** Eine neue `remote.php` oder `sync.php` einfach hochladen und die alte ersetzen – die Zugangsdaten in

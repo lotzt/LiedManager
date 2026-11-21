@@ -648,6 +648,47 @@ function offline_search(PDO $db, string $raw): array {
     return $reply(array_column($found, 2));
 }
 
+/** Nummer → Lied (wie die Nummernsuche im Programm, Verweise aufgelöst); null, wenn es keine solche Nummer gibt. */
+function plan_titles(PDO $db, array $numbers): array {
+    $q = $db->prepare('SELECT dev, gen FROM lm_rm_songs_ver ORDER BY dev = ? DESC, updated DESC LIMIT 1');
+    $q->execute([cur_dev()]);
+    $ver = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$ver) {
+        return ['index' => false, 'titles' => []];
+    }
+    $q = $db->prepare('SELECT k, nummer, titel, alias FROM lm_rm_songs WHERE dev = ? AND gen = ? ORDER BY pos');
+    $q->execute([$ver['dev'], $ver['gen']]);
+    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    $byKey = [];
+    foreach ($rows as $row) {
+        if (!isset($byKey[$row['k']])) {
+            $byKey[$row['k']] = $row;
+        }
+    }
+    $titles = [];
+    foreach ($numbers as $raw) {
+        $key = (string)preg_replace('/\s+/u', '', lm_lower(trim($raw)));
+        $song = $key !== '' ? ($byKey[$key] ?? null) : null;
+        if ($song === null && preg_match('/^([a-z])?(\d{1,3})$/', $key, $m)) {
+            $prefix = $m[1] !== '' ? $m[1] : 'p';
+            $song = $byKey[$prefix . sprintf('%03d', (int)$m[2])] ?? $byKey[$prefix . (int)$m[2]] ?? null;
+            if ($song === null) {
+                foreach ($rows as $row) {
+                    if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === (int)$m[2]) {
+                        $song = $row;
+                        break;
+                    }
+                }
+            }
+        }
+        if ($song !== null && $song['alias'] !== '' && isset($byKey[$song['alias']])) {
+            $song = $byKey[$song['alias']];
+        }
+        $titles[] = $song === null ? null : ['nummer' => (string)$song['nummer'], 'titel' => (string)$song['titel']];
+    }
+    return ['index' => true, 'titles' => $titles];
+}
+
 /** Liederliste eines umbenannten Computers übernehmen (nur wenn der neue Name noch keine hat). */
 function songs_move(PDO $db, string $old): void {
     $q = $db->prepare('SELECT 1 FROM lm_rm_songs_ver WHERE dev = ?');
@@ -934,6 +975,38 @@ function browser_api(string $api): void {
     }
 
     if ($api === 'inbox' && $method === 'GET') {
+        // vorgemerkte Bilder (Programm war aus): Anzahl und Liste für die Vorschau auf der Website
+        $q = $db->prepare('SELECT id, name FROM lm_rm_inbox WHERE dev = ? ORDER BY id');
+        $q->execute([cur_dev()]);
+        $items = array_map(function ($row) { return ['id' => (int)$row['id'], 'name' => (string)$row['name']]; },
+            $q->fetchAll(PDO::FETCH_ASSOC));
+        json_out(['pending' => count($items), 'items' => $items]);
+    }
+    if (strpos($api, 'inbox_img/') === 0 && $method === 'GET') {
+        $id = substr($api, 10);
+        if (!ctype_digit($id) || strlen($id) > 18) {
+            fail(400, 'Ungültige Anfrage.');
+        }
+        $q = $db->prepare('SELECT name, body FROM lm_rm_inbox WHERE id = ? AND dev = ?');
+        $q->execute([(int)$id, cur_dev()]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            fail(404, 'Das Bild ist nicht mehr vorgemerkt.');
+        }
+        $types = ['.png' => 'image/png', '.jpg' => 'image/jpeg', '.jpeg' => 'image/jpeg', '.gif' => 'image/gif',
+            '.bmp' => 'image/bmp', '.webp' => 'image/webp'];
+        $type = 'application/octet-stream';
+        foreach ($types as $extension => $mime) {
+            if (substr(strtolower((string)$row['name']), -strlen($extension)) === $extension) {
+                $type = $mime;
+            }
+        }
+        send(200, (string)$row['body'], $type, ['Cache-Control' => 'private, max-age=3600']);
+    }
+    if ($api === 'inbox_remove' && $method === 'POST') {
+        $args = json_decode(read_body(MAX_JSON), true);
+        $db->prepare('DELETE FROM lm_rm_inbox WHERE id = ? AND dev = ?')
+            ->execute([(int)(is_array($args) ? ($args['id'] ?? 0) : 0), cur_dev()]);
         json_out(['pending' => inbox_pending($db)]);
     }
     if ($api === 'pause' && $method === 'GET') {
@@ -980,6 +1053,12 @@ function browser_api(string $api): void {
             JSON_UNESCAPED_UNICODE);
         $db->prepare('REPLACE INTO lm_rm_pause (dev, created, body) VALUES (?, ?, ?)')->execute([cur_dev(), time(), $raw]);
         json_out(['ok' => true, 'queued' => true], 202);
+    }
+    if ($api === 'plan_titles' && $method === 'POST') {
+        // Titel zu den vorgemerkten Nummern – aus der Liederliste, die das Programm hochgeladen hat
+        $args = json_decode(read_body(MAX_JSON), true);
+        $songs = is_array($args) && is_array($args['songs'] ?? null) ? array_slice($args['songs'], 0, 100) : [];
+        json_out(plan_titles($db, array_map(function ($v) { return is_scalar($v) ? (string)$v : ''; }, $songs)));
     }
     if ($api === 'search' && $method === 'POST' && !app_alive($db)) {
         // Programm läuft nicht: in der zuletzt übertragenen Liederliste suchen (wie die Suche im Programm)

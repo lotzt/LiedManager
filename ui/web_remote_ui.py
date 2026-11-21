@@ -18,7 +18,7 @@ from PyQt6.QtCore import QBuffer, QIODevice, QObject, QSize, Qt, QTime, pyqtSign
 from PyQt6.QtGui import QImageReader
 
 from paths import user_data_dir
-from services import atem, songplan, xair
+from services import atem, site_access, songplan, xair
 from services.recorder import IDLE
 from services.remote_common import RemoteError
 from services.remote_relay import (  # noqa: F401  (auch für den Einstellungsdialog)
@@ -101,7 +101,7 @@ class RemoteController(QObject):
 
     @staticmethod
     def site_token() -> str:
-        return str(app_settings().value(KEY_SITE_TOKEN, "", type=str)).strip()
+        return site_access.token()
 
     @staticmethod
     def forget_legacy_settings() -> None:
@@ -466,6 +466,7 @@ class RemoteController(QObject):
             raise RemoteError("Ungültige Liederliste.", 400)
         songplan.set_songs(songs)
         w = self.window
+        w.refresh_plan_button()
         if not w._beamer_showing():
             w.prefill_planned_song()
         return {"ok": True, "songs": songplan.get()}

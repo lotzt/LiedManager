@@ -17,6 +17,7 @@ import time
 import traceback
 
 from paths import user_data_dir
+from services import site_access
 from services.settings import app_settings
 
 log = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def _target():
         if not s.value(KEY_SITE_ENABLED, False, type=bool):
             return None
         url = str(s.value(KEY_SITE_URL, "", type=str)).strip()
-        token = str(s.value(KEY_SITE_TOKEN, "", type=str)).strip()
+        token = site_access.token()
     except Exception:
         return None
     return (url, token) if url and token else None

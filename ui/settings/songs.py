@@ -2,12 +2,13 @@
 import threading
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
 
 from paths import default_db_path
 from services import ccli, ccli_melden
 from ui import theme as t
-from ui.sync_ui import KEY_SYNC_AUTO, KEY_SYNC_TOKEN, KEY_SYNC_URL, STATUS_OFF
+from ui.sync_ui import KEY_SYNC_AUTO, KEY_SYNC_URL, STATUS_OFF
+from ui.web_remote_ui import KEY_SITE_TOKEN
 
 
 class SongsTab:
@@ -45,9 +46,6 @@ class SongsTab:
         self.sync_auto_checkbox.toggled.connect(self._sync_auto_toggled)
         self.sync_url_input = self._line_edit("https://deine-domain.de/sync/sync.php")
         self.sync_url_input.setToolTip("Adresse von sync.php")
-        self.sync_token_input = self._line_edit("Token (steht in sync.php)")
-        self.sync_token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sync_token_input.setToolTip("Token aus sync.php")
         self.sync_now_btn = self._outline_button("Jetzt abgleichen")
         self.sync_now_btn.setToolTip("Änderungen senden und holen")
         self.sync_now_btn.clicked.connect(self._sync_now_clicked)
@@ -55,23 +53,22 @@ class SongsTab:
         self.sync_force_btn.setToolTip("Dieser Stand gilt für alle Geräte\nVorher sichern!")
         self.sync_force_btn.clicked.connect(self._sync_force_clicked)
         self.sync_url_input.editingFinished.connect(self._apply_sync_fields)
-        self.sync_token_input.editingFinished.connect(self._apply_sync_fields)
+        self.sync_url_input.textChanged.connect(self._update_url_hints)
         self.sync_status_label = QLabel(STATUS_OFF)
         self.sync_status_label.setWordWrap(True)
         self.sync_status_label.setStyleSheet(t.hint_style())
-        token_row = QHBoxLayout()                      # Token und die beiden Abgleich-Knöpfe in einer Reihe
+        # Ein Token für alles: es steht im Reiter „Remote“ (remote.php und sync.php lesen dieselbe Zugangsdatei)
+        token_note = QLabel("Token: das gemeinsame Token aus dem Reiter „Remote“")
+        token_note.setStyleSheet(t.hint_style())
+        token_note.setWordWrap(True)
+        token_row = QHBoxLayout()
         token_row.setSpacing(t.GAP)
-        token_row.addWidget(self.sync_token_input, 1)
+        token_row.addWidget(token_note, 1)
         token_row.addWidget(self.sync_now_btn)
         token_row.addWidget(self.sync_force_btn)
         token_box = QWidget()
-        token_layout = QVBoxLayout(token_box)
-        token_layout.setContentsMargins(0, 0, 0, 0)
-        token_layout.setSpacing(6)
-        token_caption = QLabel("Token")
-        token_caption.setStyleSheet(t.caption_style())
-        token_layout.addWidget(token_caption)
-        token_layout.addLayout(token_row)
+        token_box.setLayout(token_row)
+        token_row.setContentsMargins(0, 0, 0, 0)
         return self._card(self.sync_auto_checkbox,
                           self._field("Server-Adresse", self.sync_url_input),
                           token_box, self.sync_status_label,
@@ -111,12 +108,12 @@ class SongsTab:
         """Adresse und Token sofort speichern – sie bleiben auch erhalten, wenn der Dialog mit „Abbrechen“ geschlossen wird."""
         s = self.settings
         s.setValue(KEY_SYNC_URL, self.sync_url_input.text().strip())
-        s.setValue(KEY_SYNC_TOKEN, self.sync_token_input.text().strip())
+        s.setValue(KEY_SITE_TOKEN, self.site_token_input.text().strip())     # gemeinsames Token (Reiter „Remote“)
         s.sync()
 
     def _sync_now_clicked(self):
         self._save_sync_fields()
-        self.sync_requested.emit(self.sync_url_input.text().strip(), self.sync_token_input.text().strip())
+        self.sync_requested.emit(self.sync_url_input.text().strip(), self.site_token_input.text().strip())
 
     def _sync_force_clicked(self):
         url = self.sync_url_input.text().strip()
@@ -134,7 +131,7 @@ class SongsTab:
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._save_sync_fields()
-        self.sync_force_requested.emit(url, self.sync_token_input.text().strip())
+        self.sync_force_requested.emit(url, self.site_token_input.text().strip())
 
     def browse_database_path(self):
         start = self.db_path_input.text().strip() or default_db_path()

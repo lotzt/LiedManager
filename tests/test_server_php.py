@@ -109,6 +109,17 @@ def test_anmeldung_und_ansagen_vormerken(server):
     assert status == 503, "Programm läuft nicht: kein Zustand"
     status, text = http(f"{url}?api=upload&name=bild.png", b"\x89PNG", {**head, "Content-Type": "image/png"})
     assert status == 202 and json.loads(text)["queued"], "Bilder werden bei ausgeschaltetem Programm vorgemerkt"
+    status, text = http(f"{url}?api=upload&name=zwei.jpg", b"\xff\xd8zwei", {**head, "Content-Type": "image/jpeg"})
+    assert status == 202, text
+    status, text = http(f"{url}?api=inbox", headers=head)
+    items = json.loads(text)["items"]
+    assert [i["name"] for i in items] == ["bild.png", "zwei.jpg"], text
+    request = urllib.request.Request(f"{url}?api=inbox_img/{items[1]['id']}",
+                                     headers={"X-Forwarded-Proto": "https", **head})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.read() == b"\xff\xd8zwei" and response.headers["Content-Type"] == "image/jpeg"
+    status, text = http(f"{url}?api=inbox_remove", {"id": items[1]["id"]}, head)
+    assert status == 200 and json.loads(text)["pending"] == 1, text
 
     status, text = http(f"{url}?api=pause_set", {"lines": ["Erste Ansage", "Zweite"], "end": "11:45"}, head)
     assert status == 202 and json.loads(text)["queued"], text
@@ -184,3 +195,11 @@ def test_liedsuche_ohne_programm(server):
         expected = [(s.nummer, s.titel) for s in db.search_songs(query)]
         got = [(s["nummer"], s["titel"]) for s in search(query)]
         assert [str(n) for n, _ in got] == [str(n) for n, _ in expected], (query, got, expected)
+
+    # Titel zu vorgemerkten Nummern (Verweise aufgelöst, Unbekanntes = null)
+    status, body = http(f"{url}?api=plan_titles", {"songs": ["1", "100", "B1", "zz9"]}, head)
+    assert status == 200, body
+    data = json.loads(body)
+    assert data["index"], data
+    assert [t and t["nummer"] for t in data["titles"]] == ["1", "1", "b1", None], data
+    assert data["titles"][0]["titel"] == "Großer Gott, wir loben dich", data

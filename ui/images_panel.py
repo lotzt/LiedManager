@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 
 from PyQt6.QtCore import (
-    QEvent, QEventLoop, QObject, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal,
+    QEvent, QEventLoop, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QColor, QCursor, QImageIOHandler, QImageReader, QPainter, QPainterPath, QPen, QPixmap,
@@ -179,6 +179,14 @@ class _ThumbDelegate(QStyledItemDelegate):
     PAD = 6
     GAP = 6          # Abstand zur nächsten Karte
     RADIUS = 12
+    DEL = 22         # ✕ zum Entfernen (oben rechts, nur wenn die Maus über dem Bild ist)
+
+    @classmethod
+    def delete_rect(cls, rect) -> QRectF:
+        """Fläche des ✕ innerhalb der Zeile ``rect`` (QRect der Liste)."""
+        card_w = THUMB_W + 2 * cls.PAD
+        right = rect.x() + (rect.width() - card_w) / 2.0 + card_w - cls.PAD - 4
+        return QRectF(right - cls.DEL, rect.y() + cls.PAD + 4, cls.DEL, cls.DEL)
 
     def sizeHint(self, option, index):
         return QSize(THUMB_W + 2 * self.PAD, THUMB_H + 2 * self.PAD + self.GAP)
@@ -211,6 +219,16 @@ class _ThumbDelegate(QStyledItemDelegate):
 
         target = QRectF(card.x() + self.PAD, card.y() + self.PAD, THUMB_W, THUMB_H)
         painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
+
+        if hovered:                                    # ✕ zum Entfernen dieses einen Bildes
+            box = self.delete_rect(option.rect)
+            painter.setPen(QPen(QColor(t.ACCENT_BORDER), 1))
+            painter.setBrush(QColor(26, 24, 23, 215))
+            painter.drawEllipse(box.adjusted(0.5, 0.5, -0.5, -0.5))
+            painter.setPen(QPen(QColor(t.TEXT_PRIMARY), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            inset = box.width() * 0.34
+            painter.drawLine(box.topLeft() + QPointF(inset, inset), box.bottomRight() - QPointF(inset, inset))
+            painter.drawLine(QPointF(box.right() - inset, box.top() + inset), QPointF(box.left() + inset, box.bottom() - inset))
         painter.restore()
 
 
@@ -223,6 +241,7 @@ class _ThumbList(w.SmoothListWidget):
       nur Pfeiltasten und das Programm selbst (neue Bilder, Entfernen) bringen das aktuelle Bild ins Sichtfeld.
     """
     remove_requested = pyqtSignal()
+    remove_row_requested = pyqtSignal(int)      # ✕ auf einem Bild geklickt
     escape_requested = pyqtSignal()
 
     _allow_scroll_to = False     # Klassenattribut: schon beim Aufbau der Basisklasse muss es existieren
@@ -291,9 +310,34 @@ class _ThumbList(w.SmoothListWidget):
             return
         event.accept()
 
+    def _delete_row_at(self, pos) -> int:
+        """Zeile, deren ✕ an ``pos`` (Viewport-Koordinaten) liegt, sonst -1."""
+        index = self.indexAt(pos.toPoint() if hasattr(pos, "toPoint") else pos)
+        if index.isValid() and _ThumbDelegate.delete_rect(self.visualRect(index)).contains(QPointF(pos)):
+            return index.row()
+        return -1
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            row = self._delete_row_at(event.position())
+            if row >= 0:
+                self.remove_row_requested.emit(row)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if self._delete_row_at(event.position()) >= 0:     # zweiter Klick auf das ✕ zeigt kein Bild auf dem Beamer
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def viewportEvent(self, event):
         """Eigener (abgerundeter) Tooltip pro Bild statt des eckigen Standard-Tooltips."""
         if event.type() == QEvent.Type.ToolTip:
+            if self._delete_row_at(QPointF(event.pos())) >= 0:
+                show_tip("Dieses Bild entfernen", event.globalPos())
+                return True
             item = self.itemAt(event.pos())
             if item is not None and item.toolTip():
                 show_tip(item.toolTip(), event.globalPos())
@@ -369,6 +413,7 @@ class ImagesPanel(QWidget):
         self.list = _ThumbList()
         self.list.itemDoubleClicked.connect(lambda item: self.open_requested.emit(self.list.row(item)))
         self.list.remove_requested.connect(self.remove_selected)
+        self.list.remove_row_requested.connect(self.remove_row)
         self.list.escape_requested.connect(self.escape_requested)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_menu)
@@ -412,7 +457,7 @@ class ImagesPanel(QWidget):
                     continue
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, make_thumbnail(image))
-                item.setToolTip(f"{os.path.basename(path)}\nDoppelklick: anzeigen · Esc: schließen")
+                item.setToolTip(f"{os.path.basename(path)}\nDoppelklick: anzeigen · ✕ oben rechts: entfernen · Esc: schließen")
                 self.list.addItem(item)
                 self._paths.append(path)
                 if first_new_row is None:
@@ -437,6 +482,12 @@ class ImagesPanel(QWidget):
         if self.list.count():
             self.list.set_current_row_visible(min(row, self.list.count() - 1))
         self._after_change()
+
+    def remove_row(self, row: int) -> None:
+        """Ein bestimmtes Bild entfernen (✕ am Bild)."""
+        if 0 <= row < self.list.count():
+            self.list.set_current_row_visible(row)
+            self.remove_selected()
 
     def clear(self) -> None:
         for path in self._paths:
