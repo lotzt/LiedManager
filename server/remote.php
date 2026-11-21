@@ -1942,30 +1942,9 @@ function offline_search(PDO $db, string $raw): array {
                 $byKey[$row['k']] = $row;
             }
         }
-        $prefix = $m[1] !== '' ? $m[1] : 'p';
-        $number = (int)$m[2];
-        $song = null;
-        if ($m[1] === '') {
-            // Ohne Buchstabe zuerst die reine Nummer ansehen: Ist sie ein Verweis (z. B. 512 -> p102), gilt das Ziel.
-            $plain = $byKey[sprintf('%03d', $number)] ?? $byKey[(string)$number] ?? null;
-            if ($plain !== null && $plain['alias'] !== '') {
-                $resolved = lm_follow_alias($byKey, $plain);
-                if ($resolved['k'] !== $plain['k']) {
-                    $song = $resolved;
-                }
-            }
-        }
-        if ($song === null) {
-            $song = $byKey[$prefix . sprintf('%03d', $number)] ?? $byKey[$prefix . $number] ?? null;
-        }
-        if ($song === null) {
-            foreach ($rows as $row) {
-                if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === $number) {
-                    $song = $row;
-                    break;
-                }
-            }
-        }
+        // Genau diese Nummer, mit dem Buchstaben, den man getippt hat (ohne Buchstabe: ohne Präfix) – nie ein anderes
+        // Präfix. Hat das Lied einen Verweis (z. B. 512 -> p102), gilt das Ziel.
+        $song = lm_find_key($byKey, $m[1] . (int)$m[2]);
         if ($song !== null) {
             return $reply([lm_follow_alias($byKey, $song)]);
         }
@@ -2062,19 +2041,8 @@ function plan_titles(PDO $db, array $numbers): array {
     $titles = [];
     foreach ($numbers as $raw) {
         $key = (string)preg_replace('/\s+/u', '', lm_lower(trim($raw)));
-        $song = $key !== '' ? ($byKey[$key] ?? null) : null;
-        if ($song === null && preg_match('/^([a-z])?(\d{1,3})$/', $key, $m)) {
-            $prefix = $m[1] !== '' ? $m[1] : 'p';
-            $song = $byKey[$prefix . sprintf('%03d', (int)$m[2])] ?? $byKey[$prefix . (int)$m[2]] ?? null;
-            if ($song === null) {
-                foreach ($rows as $row) {
-                    if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === (int)$m[2]) {
-                        $song = $row;
-                        break;
-                    }
-                }
-            }
-        }
+        // genau diese Nummer (auch mit anderer Schreibweise der Ziffern), nie ein anderes Präfix
+        $song = $key !== '' ? lm_find_key($byKey, $key) : null;
         if ($song !== null) {
             $song = lm_follow_alias($byKey, $song);
         }

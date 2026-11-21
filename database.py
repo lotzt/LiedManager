@@ -207,26 +207,10 @@ class DatabaseManager:
         match = _NUMBER_QUERY.match(query)
         if not match:
             return []
-        prefix = match.group(1) or "p"  # ohne Buchstabe: 'p' annehmen
-        number = int(match.group(2))
-
-        if not match.group(1):
-            # Ohne Buchstabe zuerst die reine Nummer ansehen: Ist sie ein Verweis (z. B. 512 -> p102), gilt das Ziel.
-            # Nur ohne Verweis wird – wie bisher – 'p' + Nummer angenommen.
-            plain = self._by_number.get(f"{number:03d}") or self._by_number.get(str(number))
-            if plain is not None and plain.has_alias:
-                target = self._resolve_alias(plain)
-                if target is not plain:
-                    return [target]
-
-        song = (self._by_number.get(f"{prefix}{number:03d}")
-                or self._by_number.get(f"{prefix}{number}"))
-        if song is None:
-            song = next((s for s in self._songs if s.int_number == number), None)
-        if song is None:
-            return []
-
-        return [self._resolve_alias(song)]       # Verweis auf das eigentliche Lied (jedes Präfix, auch ohne Präfix)
+        # Genau diese Nummer, mit dem Buchstaben, den man getippt hat (ohne Buchstabe: ohne Präfix) – nie ein anderes
+        # Präfix. Hat das Lied einen Verweis (z. B. 512 -> p102), gilt das Ziel.
+        song = self._find_by_key(f"{match.group(1) or ''}{int(match.group(2))}")
+        return [self._resolve_alias(song)] if song is not None else []
 
     def _find_by_key(self, key: str):
         """Lied zu einem Nummern-Schlüssel: genau so geschrieben, sonst mit anderer Schreibweise der Ziffern
