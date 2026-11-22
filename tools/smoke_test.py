@@ -1656,7 +1656,7 @@ def main() -> int:
                 assert key in first, f"Zustand ohne „{key}“"
             assert len(first["cameras"]) == 2 and first["recording"]["state"] == "idle"
 
-            songs = action("search", {"text": "1"})["songs"]
+            songs = action("search", {"text": "p1"})["songs"]
             assert songs, "Suche liefert nichts"
             action("select", {"rowid": songs[0]["rowid"]})
             assert state()["song"]["nummer"] == songs[0]["nummer"]
