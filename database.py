@@ -207,21 +207,37 @@ class DatabaseManager:
         match = _NUMBER_QUERY.match(query)
         if not match:
             return []
-        prefix = match.group(1) or "p"  # ohne Buchstabe: 'p' annehmen
-        number = int(match.group(2))
+        # Genau diese Nummer, mit dem Buchstaben, den man getippt hat (ohne Buchstabe: ohne Präfix) – nie ein anderes
+        # Präfix. Hat das Lied einen Verweis (z. B. 512 -> p102), gilt das Ziel.
+        song = self._find_by_key(f"{match.group(1) or ''}{int(match.group(2))}")
+        return [self._resolve_alias(song)] if song is not None else []
 
-        song = (self._by_number.get(f"{prefix}{number:03d}")
-                or self._by_number.get(f"{prefix}{number}"))
-        if song is None:
-            song = next((s for s in self._songs if s.int_number == number), None)
-        if song is None:
-            return []
+    def _find_by_key(self, key: str):
+        """Lied zu einem Nummern-Schlüssel: genau so geschrieben, sonst mit anderer Schreibweise der Ziffern
+        (p12 = p012 = p0012) und Groß-/Kleinschreibung."""
+        key = str(key).lower().replace(" ", "")
+        song = self._by_number.get(key)
+        if song is not None:
+            return song
+        match = re.match(r"^([a-z]*)0*(\d+)$", key)
+        if not match:
+            return None
+        prefix, digits = match.group(1), match.group(2)
+        return (self._by_number.get(f"{prefix}{int(digits):03d}") or self._by_number.get(f"{prefix}{int(digits)}"))
 
-        if song.has_alias:  # Verweis auf das eigentliche Lied
-            target = self._by_number.get(str(song.summary.alias).lower().replace(" ", ""))
-            if target is not None:
-                song = target
-        return [song]
+    def _resolve_alias(self, song):
+        """Folgt Verweisen bis zum eigentlichen Lied (auch über mehrere Stationen). Ein Verweis ohne Ziel oder im Kreis
+        bleibt beim letzten gefundenen Lied."""
+        seen = {id(song)}
+        for _ in range(10):
+            if not song.has_alias:
+                break
+            target = self._find_by_key(song.summary.alias)
+            if target is None or id(target) in seen:
+                break
+            seen.add(id(target))
+            song = target
+        return song
 
     def _search_letter(self, letter: str):
         """„p“ → alle Lieder, deren Nummer mit p und einer Ziffer beginnt (p001, p002 …), nach Nummer sortiert.

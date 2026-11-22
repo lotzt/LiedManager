@@ -1850,6 +1850,33 @@ function lm_lower(string $text): string {
     return function_exists('mb_strtolower') ? mb_strtolower($text, 'UTF-8') : strtolower($text);
 }
 
+/** Lied zu einem Nummern-Schlüssel: genau so geschrieben, sonst mit anderer Schreibweise der Ziffern (p12 = p012). */
+function lm_find_key(array $byKey, string $key): ?array {
+    $key = (string)preg_replace('/\s+/u', '', lm_lower($key));
+    if (isset($byKey[$key])) {
+        return $byKey[$key];
+    }
+    if (!preg_match('/^([a-z]*)0*(\d+)$/', $key, $m)) {
+        return null;
+    }
+    $number = (int)$m[2];
+    return $byKey[$m[1] . sprintf('%03d', $number)] ?? $byKey[$m[1] . $number] ?? null;
+}
+
+/** Folgt Verweisen bis zum eigentlichen Lied (auch über mehrere Stationen; ohne Ziel oder im Kreis: letztes Lied). */
+function lm_follow_alias(array $byKey, array $song): array {
+    $seen = [$song['k'] => true];
+    for ($i = 0; $i < 10 && $song['alias'] !== ''; $i++) {
+        $target = lm_find_key($byKey, (string)$song['alias']);
+        if ($target === null || isset($seen[$target['k']])) {
+            break;
+        }
+        $seen[$target['k']] = true;
+        $song = $target;
+    }
+    return $song;
+}
+
 /** Wie normalize() im Programm: Kleinschreibung, ohne Satzzeichen, Leerraum zusammengefasst. */
 function lm_norm(string $text): string {
     $text = (string)preg_replace('/[^\p{L}\p{N}_\s]+/u', '', lm_lower($text));
@@ -1915,22 +1942,11 @@ function offline_search(PDO $db, string $raw): array {
                 $byKey[$row['k']] = $row;
             }
         }
-        $prefix = $m[1] !== '' ? $m[1] : 'p';
-        $number = (int)$m[2];
-        $song = $byKey[$prefix . sprintf('%03d', $number)] ?? $byKey[$prefix . $number] ?? null;
-        if ($song === null) {
-            foreach ($rows as $row) {
-                if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === $number) {
-                    $song = $row;
-                    break;
-                }
-            }
-        }
+        // Genau diese Nummer, mit dem Buchstaben, den man getippt hat (ohne Buchstabe: ohne Präfix) – nie ein anderes
+        // Präfix. Hat das Lied einen Verweis (z. B. 512 -> p102), gilt das Ziel.
+        $song = lm_find_key($byKey, $m[1] . (int)$m[2]);
         if ($song !== null) {
-            if ($song['alias'] !== '' && isset($byKey[$song['alias']])) {
-                $song = $byKey[$song['alias']];
-            }
-            return $reply([$song]);
+            return $reply([lm_follow_alias($byKey, $song)]);
         }
     }
 
@@ -2025,21 +2041,10 @@ function plan_titles(PDO $db, array $numbers): array {
     $titles = [];
     foreach ($numbers as $raw) {
         $key = (string)preg_replace('/\s+/u', '', lm_lower(trim($raw)));
-        $song = $key !== '' ? ($byKey[$key] ?? null) : null;
-        if ($song === null && preg_match('/^([a-z])?(\d{1,3})$/', $key, $m)) {
-            $prefix = $m[1] !== '' ? $m[1] : 'p';
-            $song = $byKey[$prefix . sprintf('%03d', (int)$m[2])] ?? $byKey[$prefix . (int)$m[2]] ?? null;
-            if ($song === null) {
-                foreach ($rows as $row) {
-                    if (preg_match('/^\s*[+-]?\d+/', (string)$row['nummer'], $lead) && (int)$lead[0] === (int)$m[2]) {
-                        $song = $row;
-                        break;
-                    }
-                }
-            }
-        }
-        if ($song !== null && $song['alias'] !== '' && isset($byKey[$song['alias']])) {
-            $song = $byKey[$song['alias']];
+        // genau diese Nummer (auch mit anderer Schreibweise der Ziffern), nie ein anderes Präfix
+        $song = $key !== '' ? lm_find_key($byKey, $key) : null;
+        if ($song !== null) {
+            $song = lm_follow_alias($byKey, $song);
         }
         $titles[] = $song === null ? null : ['nummer' => (string)$song['nummer'], 'titel' => (string)$song['titel']];
     }
