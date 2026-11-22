@@ -990,7 +990,7 @@ def main() -> int:
     window.grab().save(str(SHOTS / "01_start.png"))
 
     assert window.db.available, "Testdatenbank nicht gefunden"
-    window.search_input.setText("1")
+    window.search_input.setText("p1")
     window._on_search_return_pressed()
     settle()
     assert window.current_song_summary is not None, "Lied 1 wurde nicht gefunden"
@@ -1020,7 +1020,7 @@ def main() -> int:
     assert songplan.get() == ["p002", "p001"], songplan.get()
     songplan.set_songs([])
     window.refresh_plan_button()
-    window.search_input.setText("1")
+    window.search_input.setText("p1")
     window._on_search_return_pressed()
     settle()
 
@@ -1272,7 +1272,7 @@ def main() -> int:
     _ss().setValue(_songlog.KEY_ENABLED, True)
     _ss().setValue(_songlog.KEY_TEST_MODE, False)
     found, seen = [], set()
-    for query in ("1", "2", "3", "4", "5", "50", "p"):
+    for query in ("p1", "p2", "p3", "p4", "p5", "p50", "p"):
         for song in window.db.search_songs(query):
             if song.rowid not in seen:
                 seen.add(song.rowid)
@@ -1512,10 +1512,10 @@ def main() -> int:
     window._reload_database_if_changed()
     assert window.db.db_name == str(other / "Zweite.db"), "Datenbank wurde nicht gewechselt"
     assert window.current_song_summary is None, "Liedauswahl muss nach dem Wechsel leer sein"
-    assert window.db.search_songs("50") and not window.db.search_songs("1"), "falscher Datenbestand nach dem Wechsel"
+    assert window.db.search_songs("p50") and not window.db.search_songs("p1"), "falscher Datenbestand nach dem Wechsel"
     app_settings().setValue("database_path", "")
     window._reload_database_if_changed()
-    assert window.db.search_songs("1"), "Zurück zur automatischen Datenbank hat nicht geklappt"
+    assert window.db.search_songs("p1"), "Zurück zur automatischen Datenbank hat nicht geklappt"
 
     # ---- Datenbank-Abgleich: Einstellungen und Hintergrund-Abgleich -----------------------------
     from ui.settings_dialog import SettingsDialog
@@ -1559,7 +1559,7 @@ def main() -> int:
             time.sleep(0.02)
         settle()
         assert "Eingerichtet" in window.sync.status, f"erster Abgleich: {window.sync.status}"
-        assert window.db.search_songs("1"), "das Programm muss während und nach dem Abgleich benutzbar sein"
+        assert window.db.search_songs("p1"), "das Programm muss während und nach dem Abgleich benutzbar sein"
         dialog = SettingsDialog(window)
         dialog.sync_auto_checkbox.setChecked(False)    # nur noch auf Knopfdruck; Adresse und Token bleiben
         assert not window.sync._timer.isActive() and window.sync.enabled()
@@ -1775,7 +1775,7 @@ def main() -> int:
     assert window.gallery_window is None, "Esc hat die Galerie nicht geschlossen"
 
     # ---- Auf dem Beamer ist immer nur eines: Neues schließt, was vorher offen war --------------
-    song = window.db.search_songs("1")[0]
+    song = window.db.search_songs("p1")[0]
     window.current_song_full = window.db.get_song_full_data(song.rowid)
     window.open_gallery(0)
     settle()
